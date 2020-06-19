@@ -32,8 +32,11 @@ lazy val coreSettings = Seq(
   resolvers += "Artima Maven Repository".at("https://repo.artima.com/releases"),
   resolvers += "Typesafe Releases".at("https://repo.typesafe.com/typesafe/maven-releases/"),
   resolvers += "jitpack".at("https://jitpack.io"),
-  resolvers += Resolver.sonatypeRepo("releases"),
-  resolvers += Resolver.bintrayRepo("abankowski", "maven")
+  resolvers += Resolver.bintrayRepo("abankowski", "maven"),
+  resolvers ++= Seq(
+    Resolver.sonatypeRepo("releases"),
+    Resolver.sonatypeRepo("snapshots")
+  )
 )
 
 lazy val versions = new {
@@ -111,6 +114,7 @@ lazy val playgroundDependencies = Seq(
 
 lazy val coreDependencies = Seq(
   ("com.github.pathikrit" %% "better-files" % "3.8.0").withSources().withJavadoc(),
+  "com.chuusai" %% "shapeless" % "2.3.3",
   "org.scala-lang.modules" %% "scala-async" % "0.10.0",
   "com.roundeights" %% "hasher" % "1.2.0",
   "com.typesafe.akka" %% "akka-http" % versions.akkaHttp,

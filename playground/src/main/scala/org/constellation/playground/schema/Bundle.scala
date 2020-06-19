@@ -1,8 +1,8 @@
 package org.constellation.playground.schema
 
-//todo use Bundle as Traversable
-class Bundle(fibers: Seq[Fiber]) extends Fiber
+//todo use Bundle.fibers for Traversable
+class Bundle[A](fibers: Seq[Fiber[A]]) extends Hom
 
 object Bundle {
-  val example: Fiber = new Bundle(Seq(new Bundle(Seq.empty)))
+  val example: Hom = new Bundle(Seq(new Fiber[String]("")))
 }
