@@ -6,6 +6,7 @@ import cats.free.Free
 import cats.implicits._
 import cats.{Applicative, Bimonad, Eval, Functor, Monad, MonoidK, Traverse, ~>}
 import org.constellation.playground.schema.Enrichment.{A, M}
+import shapeless.{:+:, CNil, Coproduct, HList, HNil, ProductTypeClass, TypeClass}
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -13,9 +14,11 @@ import scala.collection.mutable
 
 case class CellT[F[_] : Concurrent, A](value: A) {}
 
-case class Cell[A](value: A) extends Operad {
-  //    def drawPlan: A => String = //todo offline method to draw plan
+case class Cell[A](value: A) extends FreeOperad[A] {
+  //    def drawPlan: A => String = //todo offline method to draw/visualize plan
+
   def job: State[Cell[_], A] = State.pure(value)
+
 }
 
 object Cell {
@@ -110,6 +113,9 @@ object Enrichment {
 
 }
 
+//Monad is Enriched/free cofree comonadic, enrichment ensures the Free Traversals in poset ordering, makes it State-full
+//category. Thus, we pass Kleisli of State across Top dimension, and Cofree/parallel in co dimension. Trick is to use
+//State to handle concurrent orderings at compile time using state.
 object EnrichApp extends App {
 
   import Cell._
