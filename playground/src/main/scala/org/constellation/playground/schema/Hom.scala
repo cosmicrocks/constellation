@@ -1,43 +1,33 @@
 package org.constellation.playground.schema
 
-import cats.free.Free
-import cats.{Functor, Inject, MonoidK}
-import shapeless.{:+:, ::, CNil, Coproduct, HList, HNil, TypeClass}
-import shapeless._
+import cats.{Applicative, Eval, Traverse}
+import higherkindness.droste.{CVAlgebra, Coalgebra}
 
-//todo: We should organize:
-// Snapshot <: CheckpointBlock <: Tx <: Hom and Hom can carry the monoids for forming edges. Note that this hierarchy
-// is equivalent to:
-// converged full state picture <: graph/hypergraph link <: linked list (topological ordering) <: user defined type class
-trait Hom {
-  //todo put edge/signing stuff here
+//todo put edge/signing stuff here
+trait Hom[A] extends Operad {
+//  val coalgebra: Coalgebra[Hom, Hom[A]] = ??? //todo unimplement/make interface
+//  val algebra: CVAlgebra[Hom, Hom[A]] = ???
 }
 
-trait Operad
+case class Context(database: String)
 
-abstract class FreeOperad[A] extends TypeClass[FreeOperad] {
-  override def coproduct[L, R <: Coproduct](cl: => FreeOperad[L], cr: => FreeOperad[R]): FreeOperad[L :+: R] = ???
-
-  override def emptyCoproduct: FreeOperad[CNil] = ???
-
-  override def product[H, T <: HList](ch: FreeOperad[H], ct: FreeOperad[T]): FreeOperad[H :: T] = ???
-
-  override def emptyProduct: FreeOperad[HNil] = ???
-
-  override def project[F, G](instance: => FreeOperad[G], to: F => G, from: G => F): FreeOperad[F] = ???
+//todo think of as Semigroup ADT for joining data
+abstract class Fiber[A] extends Hom[A] {
+  def unit: Hom[A] //todo for flattening action chains
 }
 
-object FreeOperad {
-  def join[F[_] : Functor, A]: Free[F, Free[F, A]] => Free[F, A] = ???
-}
+//todo think of as Monoid ADT for Edges to be merged
+abstract class Bundle[F](fibers: F) extends Fiber[F]
 
-abstract class Yoneda[F[_], A] {
-  self =>
-  def transformation[B](f: A => B): F[B]
+object Bundle {//use endo to define mixes of parents/children for Edges
+  implicit val traverseInstance: Traverse[Bundle] = new Traverse[Bundle]{//todo use enrichment here if needed
+    override def traverse[G[_], A, B](fa: Bundle[A])(f: A => G[B])(implicit evidence$1: Applicative[G]): G[Bundle[B]] = ???
 
-  def run: F[A] = transformation(identity)
+    override def foldLeft[A, B](fa: Bundle[A], b: B)(f: (B, A) => B): B = ???
 
-  def map[B](f: A => B): Yoneda[F, B] = new Yoneda[F, B] {
-    def transformation[C](g: (B) => C): F[C] = self.transformation(g compose f)
+    override def foldRight[A, B](fa: Bundle[A], lb: Eval[B])(f: (A, Eval[B]) => Eval[B]): Eval[B] = ???
   }
 }
+
+//todo think of as MonoidK ADT representations of an entire state dag converged (cell results)
+abstract class Simplex[T](fibers: Seq[Bundle[T]]) extends Bundle[Fiber[T]](fibers.head)//todo fold to get product
