@@ -14,11 +14,11 @@ import scala.collection.mutable
 case class CellT[F[_] : Concurrent, A](value: A) {}
 
 case class Cell[A](value: A) extends FreeOperad[A] with Bimonad[Cell] {
-  //    def drawPlan: A => String = //todo offline method to draw/visualize plan
+  //    def drawPlan: A => String = //tensor.toString
 
+  //todo define as ghylo
   def job: State[Cell[_], A] = State.pure(value)
 
-  //todo override def tensor //https://ncatlab.org/nlab/show/Day+convolution -> https://ncatlab.org/nlab/show/Day+convolution#DayConvolutionViaKanExtensionOfExternalTensorAlongTensor
   override def coflatMap[A, B](fa: Cell[A])(f: Cell[A] => B): Cell[B] = Cell(f(fa))
 
   override def flatMap[A, B](fa: Cell[A])(f: A => Cell[B]): Cell[B] = f.apply(fa.value)
@@ -38,8 +38,17 @@ case class Cell[A](value: A) extends FreeOperad[A] with Bimonad[Cell] {
   def duplicate[A](fa: Cell[A]): Cell[Cell[A]] = ???
 
   def join[A](ffa: Cell[Cell[A]]): Cell[A] = ???
-  //todo join on monad <=> combine on monoid <=> use monoidK
+  //todo join on monad <=> combine on monoid <=> use Hom Algebras
   //todo Semigroupal https://books.underscore.io/scala-with-cats/scala-with-cats.html#evals-models-of-evaluation
+  override def product(x: Operad, y: Operad): Operad = ??? //todo tensor.flatten
+
+  override def tensor(x: Operad, y: Operad): Operad = ???
+
+  override def endo: Operad = ???
+
+  override def product(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_] = ???
+
+  override def tensor(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_] = ???
 }
 
 object Cell {
@@ -49,8 +58,6 @@ object Cell {
     override def combineK[A](x: Cell[A], y: Cell[A]): Cell[A] = ???
   }
 }
-
-
 
 //Monad is Enriched/free cofree comonadic, enrichment ensures the Free Traversals in poset ordering, makes it State-full
 //category. Thus, we pass Kleisli of State across Top dimension, and Cofree/parallel in co dimension. Trick is to use

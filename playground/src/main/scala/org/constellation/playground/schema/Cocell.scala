@@ -8,6 +8,12 @@ case class CoCellT[F[_] : Concurrent, A](value: A, stateTransitionEval: Eval[Cel
 
 case class Cocell[A](value: A, stateTransitionEval: Eval[Cell[Cofree[Cell, A]]]) extends FreeOperad[A] {
   val plan: Cofree[Cell, A] = Cofree[Cell, A](value, stateTransitionEval)
+
+  override def product(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_] = ???
+
+  override def tensor(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_] = ???
+
+  override def endo: Operad = ???
 }
 
 object Cocell {

@@ -7,28 +7,25 @@ import org.constellation.playground.schema.Enrichment.{A, M}
 import shapeless.{:+:, ::, CNil, Coproduct, HList, HNil, TypeClass}
 import shapeless._
 
-//https://ncatlab.org/nlab/show/endomorphism
-//https://ncatlab.org/nlab/show/symmetric+monoidal+category
 trait Operad {
 //todo we might want to make implicit Monoid out of this, to pick up type conversions
-  //todo need to to show plan
-  def product(x: Operad, y: Operad): Operad = ??? // == combine
+  def product(x: Operad, y: Operad): Operad
 
   //todo need for group action https://ncatlab.org/nlab/show/action and to show plan
-  def tensor(x: Operad, y: Operad): Operad = ??? // == compose.flatmap(product)
+  //allows for https://ncatlab.org/nlab/show/Day+convolution
+  def tensor(x: Operad, y: Operad): Operad //https://ncatlab.org/nlab/show/Boardman-Vogt+tensor+product
 
-  //todo def endo -> The endomorphism operad composition is obtained by tensoring this last arrow with hom <=> Gets nested Cell Traversal. Flatten via Traverse or enrichment
-  // https://ncatlab.org/nlab/show/endomorphism+ring ^, this is a Fixpoint, we can nest/chain these, like hypergraph.
-  def endo: Operad = ???
+  def endo: Operad
+}
 
+object Operad {
+  //todo use for lifts in Hom
   def ifEndo[A](g: A => A, pred: A => Boolean) : A => A = {
     a =>
       val newA = g(a)
       if (pred(newA)) newA else a
   }
-}
 
-object Operad {
   //todo use algebird in these transformations
   //when making higher order functions over Coproducts,
   // define like so https://github.com/milessabin/shapeless/wiki/Feature-overview:-shapeless-2.0.0#heterogenous-maps
@@ -39,11 +36,16 @@ object Operad {
   }
 }
 
-abstract class FreeOperad[A] extends Operad
+abstract class FreeOperad[A] extends Operad {
+  override def product(x: Operad, y: Operad): Operad = product(x, y)
+  override def tensor(x: Operad, y: Operad): Operad = tensor(x, y)
+  def endo: Operad = ??? // todo return Hom
+  def product(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_]
+  def tensor(x: FreeOperad[_], y: FreeOperad[_]): FreeOperad[_]
+}
 
 object FreeOperad extends TypeClass[FreeOperad] {
-  //todo type ISB = Hom
-  // then we can use this to define a coproduct. these should be imported when composing existing Cells
+  //todo type ISB = FreeOperad :+: Hom <-> define coproducts. these should be imported when composing existing Cells
 
   implicit val traverseInstance: Traverse[FreeOperad] = new Traverse[FreeOperad]{
     override def traverse[G[_], A, B](fa: FreeOperad[A])(f: A => G[B])(implicit evidence$1: Applicative[G]): G[FreeOperad[B]] = ???
