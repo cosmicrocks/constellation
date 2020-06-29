@@ -1,5 +1,6 @@
 package org.constellation.playground.schema
 
+import cats.Applicative
 import higherkindness.droste.{CVAlgebra, Coalgebra}
 
 trait Edge {
@@ -10,7 +11,8 @@ trait HyperEdge extends Edge {
   val fibers: Seq[Edge]
 }
 
-case object Signature extends Edge
+// todo - (i: Int) is temporary to distinguish signatures in logs
+case class Signature(i: Int) extends Edge
 
 case object EdgeData extends Edge
 
@@ -19,7 +21,7 @@ case class EdgeBundle(fibers: Seq[Edge]) extends HyperEdge
 case class Transaction(override val data: Edge) extends Fiber[Edge] with Edge {
   override def unit: Hom[Edge] = this
   override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x) //return Bundle[Edge]
-  override def tensor(x: Hom[_], y: Hom[_]): Hom[Edge] = Transaction(data.sign(Seq(x, y)))
+  override def tensor(x: Hom[_], y: Hom[_]): Hom[Edge] = Transaction(data.sign(Seq(x.data, y.data)))
 
   override val coalgebra: Coalgebra[Hom, Edge] = Coalgebra {
     case h: Hom[_] => Transaction(this.data.sign(h.data))
@@ -34,7 +36,8 @@ case class Transaction(override val data: Edge) extends Fiber[Edge] with Edge {
 }
 
 case class Block(override val data: EdgeBundle) extends Bundle[EdgeBundle](data) with Edge {
-  override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] = Block(EdgeBundle(Seq(this.sign(x.data), this.sign(x.data))))
+  override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] =
+    Block(EdgeBundle(Seq(this.sign(x.data), this.sign(y.data))))
 
   override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x)
 
@@ -60,7 +63,8 @@ case class Snapshot(convergedState: Seq[Block]) extends Simplex[EdgeBundle](conv
   }
   override val data: EdgeBundle = this.convergedState.head.data //todo reduce over sign operation, get EdgeBundle
 
-  override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] = Block(EdgeBundle(Seq(this.sign(x.data), this.sign(x.data))))
+  override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] =
+    Block(EdgeBundle(Seq(this.sign(x.data), this.sign(y.data))))
 
   override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x)
 
@@ -69,5 +73,5 @@ case class Snapshot(convergedState: Seq[Block]) extends Simplex[EdgeBundle](conv
 }
 
 object ChannelApp extends App {
-  val channel = Cell[Transaction](Transaction(Signature))
+  val channel = Cell[Transaction](Transaction(Signature(1)))
 }

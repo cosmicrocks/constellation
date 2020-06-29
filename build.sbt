@@ -108,7 +108,9 @@ lazy val walletSharedDependencies = Seq(
 lazy val schemaSharedDependencies = keyToolSharedDependencies ++ walletSharedDependencies
 
 lazy val playgroundDependencies = Seq(
-  "io.higherkindness" %% "droste-core" % "0.8.0"
+  "io.higherkindness" %% "droste-core" % "0.8.0",
+  "org.typelevel" %% "cats-laws" % "2.0.0" % Test,
+  "com.github.alexarchambault" %% "scalacheck-shapeless_1.14" % "1.2.3" % Test
 ) ++
   sharedDependencies
 
@@ -247,5 +249,6 @@ lazy val schema = (project in file("schema"))
 
 lazy val playground = (project in file("playground"))
   .settings(
-    libraryDependencies ++= playgroundDependencies ++ testDependencies
+    libraryDependencies ++= playgroundDependencies ++ testDependencies,
+    addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.10.3")
   )

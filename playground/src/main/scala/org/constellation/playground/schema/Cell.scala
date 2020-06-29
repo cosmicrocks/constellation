@@ -10,8 +10,7 @@ import shapeless.{:+:, CNil, Coproduct, HList, HNil, ProductTypeClass, TypeClass
 import scala.annotation.tailrec
 import scala.collection.mutable
 
-
-case class CellT[F[_] : Concurrent, A](value: A) {}
+case class CellT[F[_]: Concurrent, A](value: A) {}
 
 case class Cell[A](value: A) extends FreeOperad[A] {
   //    def drawPlan: A => String = //tensor.toString
@@ -27,7 +26,7 @@ case class Cell[A](value: A) extends FreeOperad[A] {
 
 object Cell {
   //todo might want implicit for Traverse[CellT], should work since F is specified
-  implicit val cellBimonad = new Bimonad[Cell]{
+  implicit val cellBimonad = new Bimonad[Cell] {
     def coflatMap[A, B](fa: Cell[A])(f: Cell[A] => B): Cell[B] = Cell(f(fa))
 
     def flatMap[A, B](fa: Cell[A])(f: A => Cell[B]): Cell[B] = f.apply(fa.value)
@@ -38,10 +37,11 @@ object Cell {
 
     @tailrec
     def tailRecM[A, B](a: A)(f: A => Cell[Either[A, B]]): Cell[B] = f(a) match {
-      case Cell(either) => either match {
-        case Left(a) => tailRecM(a)(f)
-        case Right(b) => Cell(b)
-      }
+      case Cell(either) =>
+        either match {
+          case Left(a)  => tailRecM(a)(f)
+          case Right(b) => Cell(b)
+        }
     }
   }
 
