@@ -13,16 +13,8 @@ import scala.collection.mutable
 
 case class CellT[F[_] : Concurrent, A](value: A) {}
 
-case class Cell[A](value: A) extends FreeOperad[A] {
-  //    def drawPlan: A => String = //tensor.toString
-  //todo define as ghylo State[Cell[_], A] => State[Cell[_], A]
+case class Cell[A](value: A) extends Hom[A] {
   def job: State[Cell[_], A] = State.pure(value)
-
-  def duplicate[A](fa: Cell[A]): Cell[Cell[A]] = Cell[Cell[A]](fa)
-
-  def join[A](ffa: Cell[Cell[A]]): Cell[A] = ??? //todo needs to be monadic bind, use Coproduct
-  //todo join on monad <=> combine on monoid <=> use Hom Algebras
-  //todo Semigroupal https://books.underscore.io/scala-with-cats/scala-with-cats.html#evals-models-of-evaluation
 }
 
 object Cell {
@@ -69,7 +61,7 @@ object EnrichApp extends App {
     println(i.value)
   }
 
-  val loadCellMonad = FreeOperad.traverseInstance
+  val loadCellMonad = Hom.traverseInstance
   //Note: we want topologicalTraverse for Stateful (Ordered) operations. Traverse might be faster for parallel
   //We'll want Arrows when mapping over existing state channels. Need to convert State to Kleisli and vice versa
   //Add convenience methods to Cell to "flatmap" or reduce/fold over Arrows via lift

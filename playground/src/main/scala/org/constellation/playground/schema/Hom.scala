@@ -1,20 +1,22 @@
 package org.constellation.playground.schema
 
 import cats.{Applicative, Eval, Monoid, MonoidK, Traverse}
+import higherkindness.droste.data.Attr
 import higherkindness.droste.{CVAlgebra, Coalgebra}
 
 //todo put edge/signing stuff here
-trait Hom[A] extends Operad { self =>
+trait Hom[A] { self =>
   val data: A = self.unit.data
   val coalgebra: Coalgebra[Hom, A] = Coalgebra(_ => unit)
   val algebra: CVAlgebra[Hom, A] = CVAlgebra {
-    case o: Operad => unit.data
+    case h: Hom[Attr[Hom, A]] => unit.data
   }
-  override def tensor(x: Operad, y: Operad): Operad = tensor(x, y)
 
-  def tensor(x: Hom[_], y: Hom[_] = this): Hom[A] = unit
+//  def endo(x: Hom[_])(transformation: Hom[_] => Hom[_]): Hom[_]
 
-  override def unit: Hom[A] = this
+  def tensor(x: Hom[_], y: Hom[_] = this): Hom[A] = unit// //https://ncatlab.org/nlab/show/Boardman-Vogt+tensor+product
+
+  def unit: Hom[A] = this
 }
 
 object Hom {
@@ -26,10 +28,11 @@ object Hom {
     override def foldRight[A, B](fa: Hom[A], lb: Eval[B])(f: (A, Eval[B]) => Eval[B]): Eval[B] = ???
   }
 
-  implicit val fiberMonoid: MonoidK[Hom] = new MonoidK[Hom]{
-    override def empty[A]: Hom[A] = new Hom[A] {}
-
-    override def combineK[A](x: Hom[A], y: Hom[A]): Hom[A] = new Hom[A] {}.tensor(x, y)
+  //todo use for lifts
+  def ifEndo[A](g: A => A, pred: A => Boolean) : A => A = {
+    a =>
+      val newA = g(a)
+      if (pred(newA)) newA else a
   }
 }
 

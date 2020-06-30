@@ -18,7 +18,7 @@ case class EdgeBundle(fibers: Seq[Edge]) extends HyperEdge
 
 case class Transaction(override val data: Edge) extends Fiber[Edge] with Edge {
   override def unit: Hom[Edge] = this
-  override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x) //return Bundle[Edge]
+  def endo(x: Hom[_])(transformation: Hom[_]=> Hom[_]): Hom[_] = transformation(x)
   override def tensor(x: Hom[_], y: Hom[_]): Hom[Edge] = Transaction(data.sign(Seq(x, y)))
 
   override val coalgebra: Coalgebra[Hom, Edge] = Coalgebra {
@@ -36,7 +36,7 @@ case class Transaction(override val data: Edge) extends Fiber[Edge] with Edge {
 case class Block(override val data: EdgeBundle) extends Bundle[EdgeBundle](data) with Edge {
   override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] = Block(EdgeBundle(Seq(this.sign(x.data), this.sign(x.data))))
 
-  override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x)
+  def endo(x: Hom[_])(transformation: Hom[_] => Hom[_]): Hom[_] = transformation(x)
 
   override val coalgebra: Coalgebra[Hom, EdgeBundle] = Coalgebra {
     case t: Hom[_] => Block(EdgeBundle(this.data.fibers))
@@ -62,7 +62,7 @@ case class Snapshot(convergedState: Seq[Block]) extends Simplex[EdgeBundle](conv
 
   override def tensor(x: Hom[_], y: Hom[_]): Hom[EdgeBundle] = Block(EdgeBundle(Seq(this.sign(x.data), this.sign(x.data))))
 
-  override def endo(x: Operad)(transformation: Operad => Operad): Operad = transformation(x)
+  def endo(x: Hom[_])(transformation: Hom[_] => Hom[_]): Hom[_] = transformation(x)
 
   def combine(x: Snapshot, y: Snapshot): Snapshot = Snapshot(x.convergedState ++ x.convergedState)
 
