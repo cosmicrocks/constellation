@@ -19,7 +19,7 @@ scalacOptions :=
   )
 javaAgents += "org.aspectj" % "aspectjweaver" % "1.9.4" % "runtime"
 
-lazy val _version = "2.9.1"
+lazy val _version = "2.10.0-rc1"
 
 lazy val commonSettings = Seq(
   version := _version,
@@ -108,7 +108,13 @@ lazy val walletSharedDependencies = Seq(
 lazy val schemaSharedDependencies = keyToolSharedDependencies ++ walletSharedDependencies
 
 lazy val playgroundDependencies = Seq(
-  "io.higherkindness" %% "droste-core" % "0.8.0"
+  "io.higherkindness" %% "droste-core" % "0.8.0",
+  "io.higherkindness" %% "droste-laws" % "0.8.0",
+  "io.higherkindness" %% "droste-macros" % "0.8.0",
+  "org.typelevel" %% "cats-laws" % "2.0.0" % Test,
+  "com.github.alexarchambault" %% "scalacheck-shapeless_1.14" % "1.2.3" % Test,
+  "org.typelevel" %% "discipline-core" % "1.0.0" % Test,
+  "org.typelevel" %% "discipline-scalatest" % "1.0.0" % Test
 ) ++
   sharedDependencies
 
@@ -144,7 +150,8 @@ lazy val coreDependencies = Seq(
   "org.perf4j" % "perf4j" % "0.9.16",
   "pl.abankowski" %% "http-request-signer-core" % "0.3.2",
   "pl.abankowski" %% "http4s-request-signer" % "0.3.2",
-  "com.github.pureconfig" %% "pureconfig" % "0.12.3"
+  "com.github.pureconfig" %% "pureconfig" % "0.12.3",
+  "io.chrisdavenport" %% "fuuid" % "0.4.0"
 ) ++ http4sDependencies ++ schemaSharedDependencies
 
 //Test dependencies
@@ -247,5 +254,6 @@ lazy val schema = (project in file("schema"))
 
 lazy val playground = (project in file("playground"))
   .settings(
-    libraryDependencies ++= playgroundDependencies ++ testDependencies
+    libraryDependencies ++= playgroundDependencies ++ testDependencies,
+    addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.10.3")
   )
