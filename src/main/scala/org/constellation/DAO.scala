@@ -13,9 +13,9 @@ import org.constellation.domain.blacklist.BlacklistedAddresses
 import org.constellation.domain.cloud.CloudService.CloudServiceEnqueue
 import org.constellation.domain.cloud.{CloudStorageOld, HeightHashFileStorage}
 import org.constellation.domain.configuration.NodeConfig
-import org.constellation.domain.healthcheck.HealthCheckConsensusManager
+import org.constellation.domain.healthcheck.proposal.MissingProposalHealthCheckConsensusManager
+import org.constellation.domain.healthcheck.ping.{PeerHealthCheck, PingHealthCheckConsensusManager}
 import org.constellation.domain.observation.ObservationService
-import org.constellation.domain.p2p.PeerHealthCheck
 import org.constellation.domain.redownload.{
   DownloadService,
   MajorityStateChooser,
@@ -123,7 +123,8 @@ class DAO(
   var redownloadService: RedownloadService[IO] = _
   var downloadService: DownloadService[IO] = _
   var peerHealthCheck: PeerHealthCheck[IO] = _
-  var healthCheckConsensusManager: HealthCheckConsensusManager[IO] = _
+  var pingHealthCheckConsensusManager: PingHealthCheckConsensusManager[IO] = _
+  var missingProposalHealthCheckConsensusManager: MissingProposalHealthCheckConsensusManager[IO] = _
   var peerHealthCheckWatcher: PeerHealthCheckWatcher = _
   var consensusRemoteSender: ConsensusRemoteSender[IO] = _
   var consensusManager: ConsensusManager[IO] = _
@@ -261,41 +262,6 @@ class DAO(
       )
     )
     addressService = new AddressService[IO]()
-
-    peerHealthCheck = {
-      val cs = IO.contextShift(unboundedHealthExecutionContext)
-      val ce = IO.ioConcurrentEffect(cs)
-      val timer = IO.timer(unboundedHealthExecutionContext)
-
-      PeerHealthCheck[IO](
-        cluster,
-        apiClient,
-        metrics,
-        Blocker.liftExecutionContext(unboundedHealthExecutionContext),
-        healthHttpPort = nodeConfig.healthHttpPort.toString
-      )(ce, timer, cs)
-    }
-
-    healthCheckConsensusManager = {
-      val cs = IO.contextShift(unboundedHealthExecutionContext)
-      val ce = IO.ioConcurrentEffect(cs)
-      val p = IO.ioParallel(cs)
-      val timer = IO.timer(unboundedHealthExecutionContext)
-
-      HealthCheckConsensusManager[IO](
-        id,
-        cluster,
-        peerHealthCheck,
-        metrics,
-        apiClient,
-        Blocker.liftExecutionContext(unboundedHealthExecutionContext),
-        healthHttpPort = nodeConfig.healthHttpPort,
-        peerHttpPort = nodeConfig.peerHttpPort
-      )(ce, cs, p, timer)
-    }
-
-    peerHealthCheckWatcher =
-      PeerHealthCheckWatcher(ConfigUtil.config, healthCheckConsensusManager, unboundedHealthExecutionContext)
 
     partitionerPeerSampling = PartitionerPeerSampling[IO](id, cluster, trustManager)
 
@@ -461,6 +427,63 @@ class DAO(
       metrics,
       boundedExecutionContext,
       Blocker.liftExecutionContext(unboundedExecutionContext)
+    )
+
+    peerHealthCheck = {
+      val cs = IO.contextShift(unboundedHealthExecutionContext)
+      val ce = IO.ioConcurrentEffect(cs)
+      val timer = IO.timer(unboundedHealthExecutionContext)
+
+      PeerHealthCheck[IO](
+        cluster,
+        apiClient,
+        Blocker.liftExecutionContext(unboundedHealthExecutionContext),
+        healthHttpPort = nodeConfig.healthHttpPort.toString
+      )(ce, timer, cs)
+    }
+
+    pingHealthCheckConsensusManager = {
+      val cs = IO.contextShift(unboundedHealthExecutionContext)
+      val ce = IO.ioConcurrentEffect(cs)
+      val p = IO.ioParallel(cs)
+      val timer = IO.timer(unboundedHealthExecutionContext)
+
+      PingHealthCheckConsensusManager[IO](
+        id,
+        cluster,
+        peerHealthCheck,
+        metrics,
+        apiClient,
+        Blocker.liftExecutionContext(unboundedHealthExecutionContext),
+        healthHttpPort = nodeConfig.healthHttpPort,
+        peerHttpPort = nodeConfig.peerHttpPort
+      )(ce, cs, p, timer)
+    }
+
+    missingProposalHealthCheckConsensusManager = {
+      val cs = IO.contextShift(unboundedHealthExecutionContext)
+      val ce = IO.ioConcurrentEffect(cs)
+      val p = IO.ioParallel(cs)
+      val timer = IO.timer(unboundedHealthExecutionContext)
+
+      MissingProposalHealthCheckConsensusManager[IO](
+        id,
+        cluster,
+        redownloadService,
+        missingProposalFinder,
+        metrics,
+        apiClient,
+        Blocker.liftExecutionContext(unboundedHealthExecutionContext),
+        healthHttpPort = nodeConfig.healthHttpPort,
+        peerHttpPort = nodeConfig.peerHttpPort
+      )(ce, cs, p, timer)
+    }
+
+    peerHealthCheckWatcher = PeerHealthCheckWatcher(
+      ConfigUtil.config,
+      pingHealthCheckConsensusManager,
+      missingProposalHealthCheckConsensusManager,
+      unboundedHealthExecutionContext
     )
 
     val healthChecker = new HealthChecker[IO](

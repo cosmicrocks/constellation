@@ -3,8 +3,6 @@ package org.constellation.infrastructure.endpoints
 import cats.effect.Concurrent
 import cats.syntax.all._
 import io.circe.syntax._
-import org.constellation.domain.p2p.PeerHealthCheck
-import org.constellation.domain.p2p.PeerHealthCheck.PeerHealthCheckStatus
 import org.constellation.domain.trust.TrustData
 import org.constellation.p2p.{Cluster, JoinedHeight, PeerUnregister, SetNodeStatus}
 import org.constellation.schema.{Id, NodeState}
@@ -14,12 +12,9 @@ import org.http4s.circe._
 import org.http4s.dsl.Http4sDsl
 import org.constellation.p2p.Cluster.ClusterNode._
 import SetNodeStatus._
-import PeerHealthCheckStatus._
 import JoinedHeight._
 import PeerUnregister._
 import TrustData._
-import Id._
-import org.constellation.schema.observation.ObservationEvent
 
 class ClusterEndpoints[F[_]](implicit F: Concurrent[F]) extends Http4sDsl[F] {
 

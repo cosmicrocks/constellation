@@ -116,14 +116,15 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
         redownloadService.getAcceptedSnapshots().map(_.asJson).flatMap(Ok(_))
     }
 
-  private def getPeerProposals(nodeId: Id, redownloadService: RedownloadService[F]): HttpRoutes[F] =
+  private def getPeerProposals(ownId: Id, redownloadService: RedownloadService[F]): HttpRoutes[F] =
     HttpRoutes.of[F] {
-      case GET -> Root / "peer" / peerId / "snapshot" / "created" =>
+      case GET -> Root / "peer" / id / "snapshot" / "created" =>
+        val peerId = Id(id)
         val peerProposals =
-          if (Id(peerId) == nodeId)
+          if (peerId == ownId)
             redownloadService.getCreatedSnapshots()
           else
-            redownloadService.getPeerProposals(nodeId).map(_.getOrElse(Map.empty))
+            redownloadService.getPeerProposals(peerId).map(_.getOrElse(Map.empty))
 
         peerProposals.map(_.asJson).flatMap(Ok(_))
     }

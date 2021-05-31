@@ -535,7 +535,7 @@ class RedownloadService[F[_]: NonEmptyParallel](
       }
     } yield ()
 
-  private def fetchProposalForPeer(peerId: Id)(fromPeerId: Id): F[Unit] =
+  def fetchProposalForPeer(peerId: Id)(fromPeerId: Id): F[Unit] =
     for {
       peer <- cluster.getPeerInfo.map(_.get(fromPeerId))
       apiClient = peer.map(_.peerMetadata.toPeerClientMetadata)
