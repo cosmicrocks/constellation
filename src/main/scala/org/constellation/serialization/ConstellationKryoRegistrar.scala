@@ -8,10 +8,8 @@ import org.constellation.gossip.sampling.GossipPath
 import org.constellation.gossip.state.GossipMessage
 import org.constellation.infrastructure.endpoints.BuildInfoEndpoints.BuildInfoJson
 import org.constellation.rewards.EigenTrustAgents
-import org.constellation.schema.checkpoint.CheckpointBlockPayload
 import org.constellation.schema.serialization.ExplicitKryoRegistrar
 import org.constellation.schema.serialization.ExplicitKryoRegistrar.KryoSerializer.DefaultSerializer
-import org.constellation.schema.snapshot.SnapshotProposalPayload
 
 object ConstellationKryoRegistrar
     extends ExplicitKryoRegistrar(

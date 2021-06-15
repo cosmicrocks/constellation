@@ -160,7 +160,8 @@ object ConstellationNode$ extends IOApp with IOApp.WithContext {
           dao.nodeStorage,
           dao.redownloadStorage,
           dao.snapshotProposalGossipService,
-          dao.messageValidator
+          dao.messageValidator,
+          dao.metrics
         ) <+>
         SoeEndpoints.peerEndpoints[IO](dao.checkpointStorage) <+>
         TipsEndpoints.peerEndpoints[IO](dao.id, dao.checkpointStorage) <+>

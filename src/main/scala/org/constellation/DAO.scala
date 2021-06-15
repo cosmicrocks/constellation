@@ -19,11 +19,22 @@ import org.constellation.domain.genesis.GenesisStorageAlgebra
 import org.constellation.domain.healthcheck.HealthCheckConsensusManager
 import org.constellation.domain.observation.ObservationService
 import org.constellation.domain.p2p.PeerHealthCheck
-import org.constellation.domain.redownload.{DownloadService, MajorityStateChooser, MissingProposalFinder, RedownloadService, RedownloadStorageAlgebra}
+import org.constellation.domain.redownload.{
+  DownloadService,
+  MajorityStateChooser,
+  MissingProposalFinder,
+  RedownloadService,
+  RedownloadStorageAlgebra
+}
 import org.constellation.domain.rewards.StoredRewards
 import org.constellation.domain.snapshot.SnapshotStorageAlgebra
 import org.constellation.domain.storage.LocalFileStorage
-import org.constellation.domain.transaction.{TransactionChainService, TransactionGossiping, TransactionService, TransactionValidator}
+import org.constellation.domain.transaction.{
+  TransactionChainService,
+  TransactionGossiping,
+  TransactionService,
+  TransactionValidator
+}
 import org.constellation.genesis.{Genesis, GenesisObservationLocalStorage, GenesisObservationS3Storage}
 import org.constellation.gossip.checkpoint.CheckpointBlockGossipService
 import org.constellation.gossip.sampling.PartitionerPeerSampling
@@ -36,7 +47,13 @@ import org.constellation.infrastructure.genesis.GenesisStorageInterpreter
 import org.constellation.infrastructure.p2p.{ClientInterpreter, PeerHealthCheckWatcher}
 import org.constellation.infrastructure.redownload.{RedownloadPeriodicCheck, RedownloadStorageInterpreter}
 import org.constellation.infrastructure.rewards.{RewardsLocalStorage, RewardsS3Storage}
-import org.constellation.infrastructure.snapshot.{SnapshotInfoLocalStorage, SnapshotInfoS3Storage, SnapshotLocalStorage, SnapshotS3Storage, SnapshotStorageInterpreter}
+import org.constellation.infrastructure.snapshot.{
+  SnapshotInfoLocalStorage,
+  SnapshotInfoS3Storage,
+  SnapshotLocalStorage,
+  SnapshotS3Storage,
+  SnapshotStorageInterpreter
+}
 import org.constellation.keytool.KeyUtils
 import org.constellation.p2p._
 import org.constellation.rewards.{EigenTrust, RewardsManager}
@@ -149,10 +166,8 @@ class DAO(
   snapshotInfoStorage.createDirectoryIfNotExists().value.unsafeRunSync
   rewardsStorage.createDirectoryIfNotExists().value.unsafeRunSync
 
-  val missingProposalFinder: MissingProposalFinder = MissingProposalFinder(
+  val missingProposalFinder = MissingProposalFinder(
     ConfigUtil.constellation.getInt("snapshot.snapshotHeightInterval"),
-    ConfigUtil.constellation.getLong("snapshot.missingProposalOffset"),
-    ConfigUtil.constellation.getLong("snapshot.missingProposalLimit"),
     id
   )
 
@@ -163,9 +178,6 @@ class DAO(
   val genesisStorage: GenesisStorageAlgebra[IO] = new GenesisStorageInterpreter[IO]()
 
   val redownloadStorage: RedownloadStorageAlgebra[IO] = new RedownloadStorageInterpreter[IO](
-    missingProposalFinder,
-    ConfigUtil.constellation.getInt("snapshot.meaningfulSnapshotsCount"),
-    ConfigUtil.constellation.getInt("snapshot.snapshotHeightRedownloadDelayInterval"),
     keyPair
   )
 
@@ -177,7 +189,14 @@ class DAO(
     unboundedExecutionContext
   )
 
-  val broadcastService: BroadcastService[IO] = new BroadcastService[IO](clusterStorage, nodeStorage, apiClient, metrics, id, Blocker.liftExecutionContext(unboundedExecutionContext))
+  val broadcastService: BroadcastService[IO] = new BroadcastService[IO](
+    clusterStorage,
+    nodeStorage,
+    apiClient,
+    metrics,
+    id,
+    Blocker.liftExecutionContext(unboundedExecutionContext)
+  )
 
   val joiningPeerValidator: JoiningPeerValidator[IO] =
     JoiningPeerValidator[IO](apiClient, Blocker.liftExecutionContext(unboundedExecutionContext))
@@ -345,9 +364,12 @@ class DAO(
     id
   )
 
+//  ConfigUtil.constellation.getInt("snapshot.meaningfulSnapshotsCount"),
+//  ConfigUtil.constellation.getInt("snapshot.snapshotHeightRedownloadDelayInterval"),
+//  ConfigUtil.constellation.getInt("snapshot.snapshotHeightInterval"),
+
   val redownloadService: RedownloadService[IO] = RedownloadService[IO](
     redownloadStorage,
-    ConfigUtil.constellation.getInt("snapshot.snapshotHeightRedownloadDelayInterval"),
     nodeStorage,
     clusterStorage,
     MajorityStateChooser(id),
@@ -411,12 +433,20 @@ class DAO(
     new ConsensusWatcher(ConfigUtil.config, consensusManager, unboundedExecutionContext)
 
   val consensusScheduler: ConsensusScheduler =
-    new ConsensusScheduler(ConfigUtil.config, consensusManager, nodeStorage, snapshotServiceStorage, redownloadStorage, unboundedExecutionContext)
+    new ConsensusScheduler(
+      ConfigUtil.config,
+      consensusManager,
+      nodeStorage,
+      snapshotServiceStorage,
+      redownloadStorage,
+      unboundedExecutionContext
+    )
 
-  val checkpointAcceptanceRecalculationTrigger: CheckpointAcceptanceRecalculationTrigger = new CheckpointAcceptanceRecalculationTrigger(
-    checkpointService,
-    boundedExecutionContext
-  )
+  val checkpointAcceptanceRecalculationTrigger: CheckpointAcceptanceRecalculationTrigger =
+    new CheckpointAcceptanceRecalculationTrigger(
+      checkpointService,
+      boundedExecutionContext
+    )
 
   val checkpointAcceptanceTrigger: CheckpointAcceptanceTrigger = new CheckpointAcceptanceTrigger(
     nodeStorage,

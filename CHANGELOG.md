@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 - Gossiping for checkpoint blocks
 ### Changed
 - Whitelisting update
+- Majority selection algorithm
+- Missing proposal lookup algorithm
 ### Fixed
 - Tip usages cache
 

@@ -6,23 +6,32 @@ import cats.syntax.all._
 import io.chrisdavenport.mapref.MapRef
 import org.constellation.concurrency.MapRefUtils
 import org.constellation.concurrency.MapRefUtils.MapRefOps
-import org.constellation.domain.redownload.RedownloadService.{Reputation, SnapshotProposalsAtHeight, SnapshotsAtHeight}
+import org.constellation.domain.redownload.RedownloadService.{
+  PeersProposals,
+  ProposalCoordinate,
+  Reputation,
+  SnapshotProposalsAtHeight,
+  SnapshotsAtHeight
+}
 import org.constellation.domain.redownload.{MissingProposalFinder, RedownloadPlan, RedownloadStorageAlgebra}
 import org.constellation.schema.Id
 import org.constellation.schema.signature.Signed
 import org.constellation.schema.signature.Signed.signed
-import org.constellation.schema.snapshot.{HeightRange, MajorityInfo, SnapshotProposal}
-
+import org.constellation.schema.snapshot.{FilterData, HeightRange, SnapshotProposal}
 import java.security.KeyPair
+
+import org.constellation.collection.MapUtils._
+import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
+import org.constellation.concurrency.cuckoo.{CuckooFilter, MutableCuckooFilter}
+
 import scala.collection.immutable.SortedMap
 
 class RedownloadStorageInterpreter[F[_]](
-  missingProposalFinder: MissingProposalFinder,
-  meaningfulSnapshotsCount: Int,
-  redownloadInterval: Int,
   keyPair: KeyPair
 )(implicit F: Sync[F])
     extends RedownloadStorageAlgebra[F] {
+
+  private val logger = Slf4jLogger.getLogger[F]
 
   /**
     * It contains immutable historical data
@@ -39,12 +48,19 @@ class RedownloadStorageInterpreter[F[_]](
   /**
     * Majority proposals from other peers. It is used to calculate majority state.
     */
-  private val peersProposals: MapRef[F, Id, Option[SnapshotProposalsAtHeight]] =
+  private val peerProposals: MapRef[F, Id, Option[SnapshotProposalsAtHeight]] =
     MapRefUtils.ofConcurrentHashMap()
 
   private val lastMajorityState: Ref[F, SnapshotsAtHeight] = Ref.unsafe(Map.empty)
-  private val peerMajorityInfo: MapRef[F, Id, Option[MajorityInfo]] = MapRefUtils.ofConcurrentHashMap()
   private val lastSentHeight: Ref[F, Long] = Ref.unsafe(-1L)
+
+  private val majorityStallCount: Ref[F, Int] = Ref.unsafe(0)
+
+  private val localFilter: MutableCuckooFilter[F, ProposalCoordinate] =
+    MutableCuckooFilter[F, ProposalCoordinate]()
+
+  private val remoteFilters: MapRef[F, Id, Option[CuckooFilter]] =
+    MapRefUtils.ofConcurrentHashMap()
 
   def getCreatedSnapshots: F[SnapshotProposalsAtHeight] = createdSnapshots.get
 
@@ -52,18 +68,9 @@ class RedownloadStorageInterpreter[F[_]](
     createdSnapshots.modify { m =>
       val updated =
         if (m.contains(height)) m
-        else {
-          m.updated(height, signed(SnapshotProposal(hash, height, reputation), keyPair))
-        }
-      val max = maxHeight(updated)
-      val removalPoint = getRemovalPoint(max)
-      val limited = takeHighestUntilKey(updated, removalPoint)
-      (limited, ())
+        else m.updated(height, signed(SnapshotProposal(hash, height, reputation), keyPair))
+      (updated, updated.maxHeight)
     }
-
-  def getRemovalPoint(maxHeight: Long): Long = getIgnorePoint(maxHeight) - redownloadInterval * 2
-
-  def getIgnorePoint(maxHeight: Long): Long = maxHeight - meaningfulSnapshotsCount
 
   def takeHighestUntilKey[K <: Long, V](data: Map[K, V], key: K): Map[K, V] =
     data.filterKeys(_ > key)
@@ -77,28 +84,58 @@ class RedownloadStorageInterpreter[F[_]](
   def persistAcceptedSnapshot(height: Long, hash: String): F[Unit] =
     acceptedSnapshots.modify { m =>
       val updated = m.updated(height, hash)
-      val max = maxHeight(updated)
-      val removalPoint = getRemovalPoint(max)
-      val limited = takeHighestUntilKey(updated, removalPoint)
-      (limited, ())
+      (updated, updated.maxHeight)
     }
-
-  def getPeersProposals: F[Map[Id, SnapshotProposalsAtHeight]] = peersProposals.toMap
-
-  def getPeerProposals(peer: Id): F[Option[SnapshotProposalsAtHeight]] = peersProposals(peer).get
 
   def replacePeerProposals(peer: Id, proposals: SnapshotProposalsAtHeight): F[Unit] =
-    peersProposals(peer).set(proposals.some)
+    peerProposals(peer).get.flatMap { maybeMap =>
+      maybeMap.traverse(removeFromLocalFilter)
+    } >> peerProposals(peer).set(proposals.some) >> addToLocalFilter(proposals)
 
-  def persistPeerProposal(peer: Id, proposal: Signed[SnapshotProposal]): F[Unit] =
-    persistPeerProposals(peer, Map(proposal.value.height -> proposal))
+  private def removeFromLocalFilter(proposals: SnapshotProposalsAtHeight): F[Unit] =
+    proposals.values.toList.map { spp =>
+      (spp.signature.id, spp.value.height)
+    }.traverse { p =>
+      localFilter
+        .delete(p)
+        .ifM(F.unit, logger.warn(s"Proposal $p could not be removed from local filter"))
+    } >> F.unit
 
-  def persistPeerProposals(peer: Id, proposals: SnapshotProposalsAtHeight): F[Unit] =
-    peersProposals(peer).modify { maybeMap =>
-      val updatedMap = maybeMap.getOrElse(Map.empty) ++ proposals
-      val trimmedMap = takeHighestUntilKey(updatedMap, getRemovalPoint(maxHeight(updatedMap)))
-      (trimmedMap.some, ())
-    }
+  def persistPeerProposal(proposal: Signed[SnapshotProposal]): F[Unit] =
+    logger.debug(
+      s"Persisting proposal of ${proposal.signature.id.hex} at height ${proposal.value.height} and hash ${proposal.value.hash}"
+    ) >> persistPeerProposals(List(proposal))
+
+  def persistPeerProposals(proposals: Iterable[Signed[SnapshotProposal]]): F[Unit] =
+    proposals
+      .groupBy(_.signature.id)
+      .toList
+      .traverse {
+        case (id, proposals) =>
+          for {
+            addedProposals <- peerProposals(id)
+              .modify[SnapshotProposalsAtHeight] { maybeMap =>
+                val oldProposals = maybeMap.getOrElse(Map.empty)
+                val newProposals = proposals.map(s => (s.value.height, s)).toMap
+                ((oldProposals ++ newProposals).some, newProposals -- oldProposals.keySet)
+              }
+            _ <- addToLocalFilter(addedProposals)
+          } yield (addedProposals)
+      }
+      .void
+
+  private def addToLocalFilter(proposals: SnapshotProposalsAtHeight): F[Unit] =
+    proposals.values.toList.map { spp =>
+      (spp.signature.id, spp.value.height)
+    }.traverse { p =>
+      localFilter
+        .insert(p)
+        .ifM(F.unit, F.raiseError(new RuntimeException(s"Unable to insert proposal $p to local filter")))
+    } >> F.unit
+
+  def getPeersProposals: F[Map[Id, SnapshotProposalsAtHeight]] = peerProposals.toMap
+
+  def getPeerProposals(peer: Id): F[Option[SnapshotProposalsAtHeight]] = peerProposals(peer).get
 
   def getLastMajorityState: F[SnapshotsAtHeight] =
     lastMajorityState.get
@@ -121,18 +158,13 @@ class RedownloadStorageInterpreter[F[_]](
     if (snapshots.isEmpty) 0
     else snapshots.keySet.min
 
-  def getMajorityGapRanges: F[List[HeightRange]] = lastMajorityState.get.map(missingProposalFinder.findGapRanges)
-
-  def getPeerMajorityInfo: F[Map[Id, MajorityInfo]] = peerMajorityInfo.toMap
-
-  def updatePeerMajorityInfo(peerId: Id, majorityInfo: MajorityInfo): F[Unit] =
-    peerMajorityInfo(peerId).set(majorityInfo.some)
-
   def clear(): F[Unit] =
     for {
       _ <- createdSnapshots.modify(_ => (Map.empty, ()))
       _ <- acceptedSnapshots.modify(_ => (Map.empty, ()))
-      _ <- peersProposals.clear
+      _ <- peerProposals.clear
+      _ <- localFilter.clear
+      _ <- remoteFilters.clear
       _ <- setLastMajorityState(Map.empty)
       _ <- setLastSentHeight(-1)
     } yield ()
@@ -161,4 +193,43 @@ class RedownloadStorageInterpreter[F[_]](
       // val updated = (m -- plan.toRemove.keySet) |+| plan.toDownload
       (updated, ())
     }
+
+  def removeSnapshotsAndProposalsBelowHeight(
+    height: Long
+  ): F[(SnapshotsAtHeight, SnapshotProposalsAtHeight, PeersProposals)] =
+    for {
+      as <- acceptedSnapshots.updateAndGet(_.removeHeightsBelow(height))
+      cs <- createdSnapshots.updateAndGet(_.removeHeightsBelow(height))
+      pp <- removePeerProposalsBelowHeight(height)
+    } yield (as, cs, pp)
+
+  private def removePeerProposalsBelowHeight(height: Long): F[PeersProposals] =
+    for {
+      ids <- peerProposals.keys
+      results <- ids.traverse { id =>
+        peerProposals(id).modify { maybeMap =>
+          val oldProposals = maybeMap.getOrElse(Map.empty)
+          val removedProposals = oldProposals.filterKeys(_ < height)
+          val result = oldProposals.removeHeightsBelow(height)
+          (result.some, (removedProposals, result))
+        }.flatMap { case (removed, result) => removeFromLocalFilter(removed) >> F.pure((id, result)) }
+      }
+    } yield results.toMap
+
+  def replaceRemoteFilterData(peerId: Id, filterData: FilterData): F[Unit] =
+    remoteFilters(peerId).set(CuckooFilter(filterData).some)
+
+  def getRemoteFilters: F[Map[Id, CuckooFilter]] = remoteFilters.toMap
+
+  def localFilterData: F[FilterData] = localFilter.getFilterData
+
+  def getMajorityStallCount: F[Int] = majorityStallCount.get
+
+  def resetMajorityStallCount: F[Unit] = majorityStallCount.set(0)
+
+  def incrementMajorityStallCount: F[Unit] = majorityStallCount.update(_ + 1)
+
+  implicit val proposalCoordinateToString: ProposalCoordinate => String = {
+    case (id, height) => s"$id:$height"
+  }
 }

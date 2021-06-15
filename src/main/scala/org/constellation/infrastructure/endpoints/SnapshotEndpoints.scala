@@ -8,6 +8,7 @@ import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
 import io.circe.Encoder
 import io.circe.generic.semiauto._
 import io.circe.syntax._
+import org.constellation.collection.MapUtils._
 import org.constellation.domain.cluster.NodeStorageAlgebra
 import org.constellation.domain.redownload.{RedownloadService, RedownloadStorageAlgebra}
 import org.constellation.domain.snapshot.SnapshotStorageAlgebra
@@ -17,11 +18,19 @@ import org.constellation.gossip.state.GossipMessage
 import org.constellation.gossip.validation._
 import org.constellation.p2p.Cluster
 import org.constellation.schema.Id._
-import org.constellation.schema.snapshot.{LatestMajorityHeight, SnapshotInfo, SnapshotProposalPayload, StoredSnapshot}
+import org.constellation.schema.signature.Signed
+import org.constellation.schema.snapshot.{
+  LatestMajorityHeight,
+  SnapshotInfo,
+  SnapshotProposal,
+  SnapshotProposalPayload,
+  StoredSnapshot
+}
 import org.constellation.schema.{Id, NodeState}
 import org.constellation.serialization.KryoSerializer
 import org.constellation.session.Registration.`X-Id`
 import org.constellation.storage.SnapshotService
+import org.constellation.util.Metrics
 import org.http4s.circe._
 import org.http4s.dsl.Http4sDsl
 import org.http4s.{HttpRoutes, Response}
@@ -36,7 +45,7 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
   private val logger: SelfAwareStructuredLogger[F] = Slf4jLogger.getLogger[F]
 
   def publicEndpoints(
-    nodeId: Id,
+    selfId: Id,
     snapshotStorage: LocalFileStorage[F, StoredSnapshot],
     snapshotService: SnapshotService[F],
     redownloadStorage: RedownloadStorageAlgebra[F]
@@ -44,8 +53,9 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
     getStoredSnapshotsEndpoint(snapshotStorage) <+>
       getCreatedSnapshotsEndpoint(redownloadStorage) <+>
       getAcceptedSnapshotsEndpoint(redownloadStorage) <+>
-      getPeerProposals(nodeId, redownloadStorage) <+>
-      getNextSnapshotHeight(nodeId, snapshotService) <+>
+      getPeerProposals(selfId, redownloadStorage) <+>
+      queryPeerProposals(selfId, redownloadStorage) <+>
+      getNextSnapshotHeight(selfId, snapshotService) <+>
       getLatestMajorityHeight(redownloadStorage) <+>
       getLatestMajorityState(redownloadStorage) <+>
       getTotalSupply(snapshotService)
@@ -58,18 +68,20 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
     nodeStorage: NodeStorageAlgebra[F],
     redownloadStorage: RedownloadStorageAlgebra[F],
     snapshotProposalGossipService: SnapshotProposalGossipService[F],
-    messageValidator: MessageValidator
+    messageValidator: MessageValidator,
+    metrics: Metrics
   ) =
     getStoredSnapshotsEndpoint(snapshotStorage) <+>
       getStoredSnapshotByHash(snapshotStorage) <+>
       getCreatedSnapshotsEndpoint(redownloadStorage) <+>
       getAcceptedSnapshotsEndpoint(redownloadStorage) <+>
       getPeerProposals(nodeId, redownloadStorage) <+>
+      queryPeerProposals(nodeId, redownloadStorage) <+>
       getNextSnapshotHeight(nodeId, snapshotService) <+>
       getSnapshotInfo(snapshotService, nodeStorage) <+>
       getSnapshotInfoByHash(snapshotInfoStorage) <+>
       getLatestMajorityHeight(redownloadStorage) <+>
-      postSnapshotProposal(snapshotProposalGossipService, redownloadStorage, messageValidator)
+      postSnapshotProposal(snapshotProposalGossipService, redownloadStorage, messageValidator, metrics)
 
   def ownerEndpoints(
     nodeId: Id,
@@ -81,6 +93,7 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
       getCreatedSnapshotsEndpoint(redownloadStorage) <+>
       getAcceptedSnapshotsEndpoint(redownloadStorage) <+>
       getPeerProposals(nodeId, redownloadStorage) <+>
+      queryPeerProposals(nodeId, redownloadStorage) <+>
       getLatestMajorityHeight(redownloadStorage)
 
   private def getStoredSnapshotsEndpoint(snapshotStorage: LocalFileStorage[F, StoredSnapshot]): HttpRoutes[F] =
@@ -118,16 +131,32 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
         redownloadStorage.getAcceptedSnapshots.map(_.asJson).flatMap(Ok(_))
     }
 
-  private def getPeerProposals(nodeId: Id, redownloadStorage: RedownloadStorageAlgebra[F]): HttpRoutes[F] =
+  private def getPeerProposals(ownId: Id, redownloadStorage: RedownloadStorageAlgebra[F]): HttpRoutes[F] =
     HttpRoutes.of[F] {
-      case GET -> Root / "peer" / peerId / "snapshot" / "created" =>
+      case GET -> Root / "peer" / hex / "snapshot" / "created" =>
+        val peerId = Id(hex)
         val peerProposals =
-          if (Id(peerId) == nodeId)
+          if (peerId == ownId)
             redownloadStorage.getCreatedSnapshots
           else
-            redownloadStorage.getPeerProposals(nodeId).map(_.getOrElse(Map.empty))
+            redownloadStorage.getPeerProposals(peerId).map(_.getOrElse(Map.empty))
 
         peerProposals.map(_.asJson).flatMap(Ok(_))
+    }
+
+  private def queryPeerProposals(ownId: Id, redownloadStorage: RedownloadStorageAlgebra[F]): HttpRoutes[F] =
+    HttpRoutes.of[F] {
+      case req @ POST -> Root / "snapshot" / "proposal" / "_query" =>
+        for {
+          query <- req.decodeJson[List[(Id, Long)]]
+          result <- query.traverse {
+            case (`ownId`, height) =>
+              redownloadStorage.getCreatedSnapshots.map(_.get(height))
+            case (peerId, height) =>
+              redownloadStorage.getPeerProposals(peerId).map(_.flatMap(_.get(height)))
+          }
+          resp <- Ok(result.asJson)
+        } yield resp
     }
 
   implicit val idLongEncoder: Encoder[(Id, Long)] = deriveEncoder
@@ -188,7 +217,8 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
   private[endpoints] def postSnapshotProposal(
     snapshotProposalGossipService: SnapshotProposalGossipService[F],
     redownloadStorage: RedownloadStorageAlgebra[F],
-    messageValidator: MessageValidator
+    messageValidator: MessageValidator,
+    metrics: Metrics
   ): HttpRoutes[F] =
     HttpRoutes.of[F] {
       case req @ POST -> Root / "peer" / "snapshot" / "created" =>
@@ -205,8 +235,9 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
             case Valid(_) =>
               val processProposalAsync = F.start(
                 C.shift >>
-                  redownloadStorage.persistPeerProposal(message.origin, payload.proposal) >>
-                  redownloadStorage.updatePeerMajorityInfo(message.origin, payload.majorityInfo) >>
+                  redownloadStorage.persistPeerProposal(payload.proposal) >>
+                  redownloadStorage.replaceRemoteFilterData(message.origin, payload.filterData) >>
+                  updatePeerProposalMetric(metrics, payload.proposal) >>
                   snapshotProposalGossipService.spread(message)
               )
 
@@ -219,6 +250,13 @@ class SnapshotEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ext
           }
         } yield res
     }
+
+  private def updatePeerProposalMetric(metrics: Metrics, proposal: Signed[SnapshotProposal]): F[Unit] =
+    metrics.updateMetricAsync(
+      "snapshot_lastPeerProposalHeight",
+      proposal.value.height,
+      Seq(("peerId", proposal.signature.id.hex))
+    )
 
   private def getLatestMajorityState(redownloadStorage: RedownloadStorageAlgebra[F]): HttpRoutes[F] = HttpRoutes.of[F] {
     case GET -> Root / "majority" / "state" =>
@@ -254,7 +292,8 @@ object SnapshotEndpoints {
     nodeStorage: NodeStorageAlgebra[F],
     redownloadStorage: RedownloadStorageAlgebra[F],
     snapshotProposalGossipService: SnapshotProposalGossipService[F],
-    messageValidator: MessageValidator
+    messageValidator: MessageValidator,
+    metrics: Metrics
   ): HttpRoutes[F] =
     new SnapshotEndpoints[F]()
       .peerEndpoints(
@@ -265,7 +304,8 @@ object SnapshotEndpoints {
         nodeStorage,
         redownloadStorage,
         snapshotProposalGossipService,
-        messageValidator
+        messageValidator,
+        metrics
       )
 
   def ownerEndpoints[F[_]: Concurrent: ContextShift](

@@ -1,12 +1,15 @@
 package org.constellation.domain.redownload
 
-import cats.NonEmptyParallel
 import cats.data.{EitherT, NonEmptyList}
 import cats.effect.{Blocker, Concurrent, ContextShift, Timer}
 import cats.syntax.all._
+import cats.{Applicative, NonEmptyParallel}
 import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
 import io.circe.{Decoder, Encoder}
+import org.constellation.ConfigUtil
 import org.constellation.checkpoint.{CheckpointService, TopologicalSort}
+import org.constellation.collection.MapUtils._
+import org.constellation.concurrency.cuckoo.CuckooFilter
 import org.constellation.domain.checkpointBlock.CheckpointStorageAlgebra
 import org.constellation.domain.cloud.CloudService.CloudServiceEnqueue
 import org.constellation.domain.cluster.{BroadcastService, ClusterStorageAlgebra, NodeStorageAlgebra}
@@ -28,11 +31,11 @@ import org.constellation.util.Metrics
 import scala.collection.SortedMap
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
+import scala.math.{max, min}
 import scala.util.Random
 
-class RedownloadService[F[_]: NonEmptyParallel](
+class RedownloadService[F[_]: NonEmptyParallel: Applicative](
   redownloadStorage: RedownloadStorageAlgebra[F],
-  redownloadInterval: Int,
   nodeStorage: NodeStorageAlgebra[F],
   clusterStorage: ClusterStorageAlgebra[F],
   majorityStateChooser: MajorityStateChooser,
@@ -55,12 +58,20 @@ class RedownloadService[F[_]: NonEmptyParallel](
 
   private val logger = Slf4jLogger.getLogger[F]
 
+  private val redownloadInterval =
+    ConfigUtil.getOrElse("constellation.snapshot.snapshotHeightRedownloadDelayInterval", 40)
+  private val heightInterval = ConfigUtil.getOrElse("constellation.snapshot.snapshotHeightInterval", 2L)
+  private val meaningfulSnapshotsCount = ConfigUtil.getOrElse("constellation.snapshot.meaningfulSnapshotsCount", 80L)
+  private val stallCountThreshold = ConfigUtil.getOrElse("constellation.snapshot.stallCount", 4L)
+  private val proposalLookupLimit = ConfigUtil.getOrElse("constellation.snapshot.proposalLookupLimit", 6L)
+
   def clear: F[Unit] =
     for {
       _ <- redownloadStorage.clear()
       _ <- rewardsManager.clearLastRewardedHeight()
     } yield ()
 
+  // TODO?
   def fetchAndUpdatePeersProposals(): F[Unit] =
     for {
       _ <- logger.debug("Fetching and updating peer proposals")
@@ -71,11 +82,10 @@ class RedownloadService[F[_]: NonEmptyParallel](
       }
 
       _ <- responses.traverse {
-        case (id, proposals) => redownloadStorage.persistPeerProposals(id, proposals)
+        case (_, proposals) => redownloadStorage.persistPeerProposals(proposals.values)
       }
     } yield ()
 
-  // TODO: Extract to HTTP layer
   private def fetchCreatedSnapshots(client: PeerClientMetadata): F[SnapshotProposalsAtHeight] =
     PeerResponse
       .run(
@@ -86,163 +96,6 @@ class RedownloadService[F[_]: NonEmptyParallel](
       .handleErrorWith { e =>
         logger.error(e)(s"Fetch peers proposals error") >> F.pure(Map.empty[Long, Signed[SnapshotProposal]])
       }
-
-  def checkForAlignmentWithMajoritySnapshot(isDownload: Boolean = false): F[Unit] = {
-    def wrappedRedownload(
-      shouldRedownload: Boolean,
-      meaningfulAcceptedSnapshots: SnapshotsAtHeight,
-      meaningfulMajorityState: SnapshotsAtHeight
-    ): F[Unit] =
-      for {
-        _ <- if (shouldRedownload) {
-          val plan = calculateRedownloadPlan(meaningfulAcceptedSnapshots, meaningfulMajorityState)
-          val result = getAlignmentResult(meaningfulAcceptedSnapshots, meaningfulMajorityState, redownloadInterval)
-          for {
-            _ <- logger.debug(s"Alignment result: $result")
-            _ <- logger.debug("Redownload needed! Applying the following redownload plan:")
-            _ <- applyPlan(plan, meaningfulMajorityState).value.flatMap(F.fromEither)
-            _ <- metrics.updateMetricAsync[F]("redownload_hasLastRedownloadFailed", 0)
-          } yield ()
-        }.handleErrorWith { error =>
-          metrics.updateMetricAsync[F]("redownload_hasLastRedownloadFailed", 1) >>
-            metrics.incrementMetricAsync("redownload_redownloadFailures_total") >>
-            error.raiseError[F, Unit]
-        } else logger.debug("No redownload needed - snapshots have been already aligned with majority state. ")
-      } yield ()
-
-    val wrappedCheck = for {
-      _ <- logger.debug("Checking alignment with majority snapshot...")
-      peersProposals <- redownloadStorage.getPeersProposals
-      createdSnapshots <- redownloadStorage.getCreatedSnapshots
-      acceptedSnapshots <- redownloadStorage.getAcceptedSnapshots
-
-      peers <- clusterStorage.getPeers
-      ownPeer <- nodeStorage.getOwnJoinedHeight
-      peersCache = peers.map {
-        case (id, peerData) => (id, peerData.majorityHeight)
-      } ++ Map(nodeId -> NonEmptyList.one(MajorityHeight(ownPeer, None)))
-
-      _ <- logger.debug(s"Peers with majority heights")
-      _ <- peersCache.toList.traverse {
-        case (id, majorityHeight) => logger.debug(s"[$id]: $majorityHeight")
-      }
-
-      _ <- logger.debug(s"Created snapshots: ${formatProposals(createdSnapshots)} ")
-      _ <- logger.debug(s"Peers proposals: ${peersProposals.mapValues(formatProposals)} ")
-
-      majorityState = majorityStateChooser.chooseMajorityState(
-        createdSnapshots,
-        peersProposals,
-        peersCache
-      )
-
-      potentialGaps = missingProposalFinder.findGaps(majorityState)
-
-      _ <- if (potentialGaps.isEmpty) {
-        logger.debug("Calculated majority state has no gaps")
-      } else {
-        logger.error(s"Found following gaps ${potentialGaps} in majority: ${majorityState.keys.toList.sorted}")
-      }
-
-      maxMajorityHeight = redownloadStorage.maxHeight(majorityState)
-      ignorePoint = redownloadStorage.getIgnorePoint(maxMajorityHeight)
-      majorityStateCutoff = if (isDownload) maxMajorityHeight else ownPeer.getOrElse(maxMajorityHeight)
-      meaningfulAcceptedSnapshots = takeHighestUntilKey(acceptedSnapshots, ignorePoint)
-      meaningfulMajorityState = takeHighestUntilKey(majorityState, ignorePoint).filterKeys(_ >= majorityStateCutoff)
-
-      _ <- redownloadStorage.setLastMajorityState(meaningfulMajorityState)
-
-      _ <- if (meaningfulMajorityState.isEmpty) logger.debug("No majority - skipping redownload") else F.unit
-
-      shouldPerformRedownload = shouldRedownload(
-        meaningfulAcceptedSnapshots,
-        meaningfulMajorityState,
-        redownloadInterval,
-        isDownload
-      )
-
-      _ <- if (shouldPerformRedownload) {
-        {
-          if (isDownload)
-            broadcastService.compareAndSet(NodeState.validForDownload, NodeState.DownloadInProgress)
-          else
-            broadcastService.compareAndSet(NodeState.validForRedownload, NodeState.DownloadInProgress)
-        }.flatMap { state =>
-          if (state.isNewSet) {
-            wrappedRedownload(shouldPerformRedownload, meaningfulAcceptedSnapshots, meaningfulMajorityState).handleErrorWith {
-              error =>
-                logger.error(error)(s"Redownload error, isDownload=$isDownload: ${stringifyStackTrace(error)}") >> {
-                  if (isDownload)
-                    error.raiseError[F, Unit]
-                  else
-                    broadcastService
-                      .compareAndSet(NodeState.validDuringDownload, NodeState.Ready)
-                      .void
-                }
-            }
-          } else
-            logger.debug(s"Setting node state during redownload failed! Skipping redownload. isDownload=$isDownload")
-        }
-      } else logger.debug("No redownload needed - snapshots have been already aligned with majority state.")
-
-      _ <- logger.debug("Sending majority snapshots to cloud.")
-      _ <- if (meaningfulMajorityState.nonEmpty) sendMajoritySnapshotsToCloud()
-      else logger.debug("No majority - skipping sending to cloud")
-
-      _ <- logger.debug("Rewarding majority snapshots.")
-      _ <- if (meaningfulMajorityState.nonEmpty) rewardMajoritySnapshots().value.flatMap(F.fromEither)
-      else logger.debug("No majority - skipping rewarding")
-
-      _ <- logger.debug("Removing unaccepted snapshots from disk.")
-      _ <- removeUnacceptedSnapshotsFromDisk().value.flatMap(F.fromEither)
-
-      lowestMajorityHeight <- redownloadStorage.getLowestMajorityHeight
-
-      checkpointsToRemove <- checkpointStorage.getInSnapshot.map(_.filter {
-        case (_, height) => height < (lowestMajorityHeight - 2)
-      }).map(_.map(_._1))
-
-      _ <- logger.debug(s"Removing checkpoints below height: ${lowestMajorityHeight - 2}. To remove: ${checkpointsToRemove.size}")
-//      _ <- checkpointStorage.removeCheckpoints(checkpointsToRemove)
-//
-      _ <- if (shouldPerformRedownload && !isDownload) { // I think we should only set it to Ready when we are not joining
-        broadcastService.compareAndSet(NodeState.validDuringDownload, NodeState.Ready)
-      } else F.unit
-
-      _ <- logger.debug("Accepting all the checkpoint blocks received during the redownload.")
-      _ <- acceptCheckpointBlocks().value.flatMap(F.fromEither)
-
-
-      _ <- if (!shouldPerformRedownload) findAndFetchMissingProposals(peersProposals, peersCache) else F.unit
-    } yield ()
-
-    nodeStorage.getNodeState.map { current =>
-      if (isDownload) NodeState.validForDownload.contains(current)
-      else NodeState.validForRedownload.contains(current)
-    }.ifM(
-      wrappedCheck,
-      logger.debug(s"Node state is not valid for redownload, skipping. isDownload=$isDownload") >> F.unit
-    )
-  }.handleErrorWith { error =>
-    logger.error(error)("Error during checking alignment with majority snapshot.") >>
-      error.raiseError[F, Unit]
-  }
-
-  def removeUnacceptedSnapshotsFromDisk(): EitherT[F, Throwable, Unit] =
-    for {
-      nextSnapshotHash <- snapshotServiceStorage.getNextSnapshotHash.attemptT
-      stored <- snapshotStorage.list().map(_.toSet)
-      accepted <- redownloadStorage.getAcceptedSnapshots.attemptT.map(_.values.toSet)
-      created <- redownloadStorage.getCreatedSnapshots.attemptT.map(_.values.map(_.value.hash).toSet)
-      diff = stored.diff(accepted ++ created ++ Set(nextSnapshotHash))
-      sentToCloud <- cloudService.getAlreadySent().map(_.map(_.hash)).attemptT
-      toRemove = diff.intersect(sentToCloud).toList
-      _ <- toRemove.traverse { hash =>
-        snapshotStorage.delete(hash) >>
-          snapshotInfoStorage.delete(hash) >>
-          cloudService.removeSentSnapshot(hash).attemptT
-      }
-    } yield ()
 
   private[redownload] def fetchStoredSnapshotsFromAllPeers(): F[Map[PeerClientMetadata, Set[String]]] =
     for {
@@ -301,24 +154,14 @@ class RedownloadService[F[_]: NonEmptyParallel](
         unboundedBlocker
       )(client)
 
-  private[redownload] def fetchAndUpdatePeerProposals(peerId: Id)(client: PeerClientMetadata): F[Unit] =
-    for {
-      maybeProposals <- fetchPeerProposals(peerId, client)
-      _ <- maybeProposals.map { proposals =>
-        proposals.filter { case (_, signedProposal) => signedProposal.validSignature }
-      }.traverse { proposals =>
-        redownloadStorage.persistPeerProposals(peerId, proposals)
-      }
-    } yield ()
-
   private[redownload] def fetchPeerProposals(
-    peerId: Id,
+    query: List[ProposalCoordinate],
     client: PeerClientMetadata
-  ): F[Option[SnapshotProposalsAtHeight]] =
+  ): F[List[Option[Signed[SnapshotProposal]]]] =
     PeerResponse
       .run(
         apiClient.snapshot
-          .getPeerProposals(peerId),
+          .queryPeerProposals(query),
         unboundedBlocker
       )(client)
 
@@ -406,51 +249,283 @@ class RedownloadService[F[_]: NonEmptyParallel](
             checkpointService.addToAcceptance(block)
           }
 
-          snapshotInfoFromMemPool <- fetchSnapshotInfo(client)
-            .flatMap { snapshotInfo =>
-              C.evalOn(boundedExecutionContext)(F.delay {
-                KryoSerializer.deserializeCast[SnapshotInfo](snapshotInfo)
-              })
-            }
+          snapshotInfoFromMemPool <- fetchSnapshotInfo(client).flatMap { snapshotInfo =>
+            C.evalOn(boundedExecutionContext)(F.delay {
+              KryoSerializer.deserializeCast[SnapshotInfo](snapshotInfo)
+            })
+          }
 
           _ <- checkpointStorage.setTips(snapshotInfoFromMemPool.tips)
         } yield ()
       }.attemptT
     } yield ()
 
-  private[redownload] def getLookupRange(majorityInfos: Map[Id, MajorityInfo]): F[HeightRange] =
-    for {
-      mr <- redownloadStorage.getMajorityRange
-      createdHeights <- redownloadStorage.getCreatedSnapshots.map(_.values.map(_.value.height))
-      peersHeights = majorityInfos.values.map(_.majorityRange.to)
-      maxHeight = (mr.to :: (createdHeights ++ peersHeights).toList).max
-    } yield HeightRange(mr.from, maxHeight)
+  def checkForAlignmentWithMajoritySnapshot(isDownload: Boolean = false): F[Unit] = {
+    def wrappedRedownload(
+      shouldRedownload: Boolean,
+      meaningfulAcceptedSnapshots: SnapshotsAtHeight,
+      meaningfulMajorityState: SnapshotsAtHeight
+    ): F[Unit] =
+      for {
+        _ <- if (shouldRedownload) {
+          val plan = calculateRedownloadPlan(meaningfulAcceptedSnapshots, meaningfulMajorityState)
+          val result = getAlignmentResult(meaningfulAcceptedSnapshots, meaningfulMajorityState, redownloadInterval)
+          for {
+            _ <- logger.debug(s"Alignment result: $result")
+            _ <- logger.debug("Redownload needed! Applying the following redownload plan:")
+            _ <- applyPlan(plan, meaningfulMajorityState).value.flatMap(F.fromEither)
+            _ <- metrics.updateMetricAsync[F]("redownload_hasLastRedownloadFailed", 0)
+          } yield ()
+        }.handleErrorWith { error =>
+          metrics.updateMetricAsync[F]("redownload_hasLastRedownloadFailed", 1) >>
+            metrics.incrementMetricAsync("redownload_redownloadFailures_total") >>
+            error.raiseError[F, Unit]
+        } else logger.debug("No redownload needed - snapshots have been already aligned with majority state. ")
+      } yield ()
 
-  private def findAndFetchMissingProposals(peersProposals: PeersProposals, peersCache: PeersCache): F[Unit] =
-    for {
-      peerMajorityInfo <- redownloadStorage.getPeerMajorityInfo
-      lookupRange <- getLookupRange(peerMajorityInfo)
-      missingProposals = missingProposalFinder.findMissingPeerProposals(lookupRange, peersProposals, peersCache)
-      _ <- missingProposals.nonEmpty
-        .pure[F]
-        .ifM(
-          logger.info(s"Found missing proposals $missingProposals"),
-          logger.info(s"No missing proposals found")
+    val wrappedCheck = for {
+      _ <- logger.debug("Checking alignment with majority snapshot...")
+
+      lastMajority <- redownloadStorage.getLastMajorityState
+      (_, createdSnapshots, peerProposals) <- redownloadStorage.removeSnapshotsAndProposalsBelowHeight(
+        lastMajority.minHeight
+      )
+
+      peers <- clusterStorage.getPeers
+      ownPeer <- nodeStorage.getOwnJoinedHeight
+      peersCache = peers.map {
+        case (id, peerData) => (id, peerData.majorityHeight)
+      } ++ Map(nodeId -> NonEmptyList.one(MajorityHeight(ownPeer, None)))
+
+      _ <- logger.debug(s"Peers with majority heights $peersCache")
+
+      calculatedMajority = majorityStateChooser.chooseMajorityState(
+        createdSnapshots,
+        peerProposals,
+        peersCache
+      )
+
+      gaps = missingProposalFinder.findGaps(calculatedMajority)
+      _ <- if (gaps.isEmpty) {
+        logger.debug(
+          s"Majority calculated in range ${calculatedMajority.heightRange} has no gaps"
         )
-      _ <- missingProposals.toList.traverse {
-        case (peerId, peerGaps) =>
-          val selectedPeer = missingProposalFinder
-            .selectPeerForFetchingMissingProposals(lookupRange, peerGaps, peerMajorityInfo - peerId)
-            .getOrElse(peerId)
-          fetchProposalForPeer(peerId)(selectedPeer)
+      } else {
+        logger.warn(
+          s"Majority calculated in range ${calculatedMajority.heightRange} has following gaps $gaps"
+        )
+      }
+
+      calculatedMajorityWithoutGaps = if (gaps.isEmpty) calculatedMajority
+      else calculatedMajority.removeHeightsAbove(gaps.min)
+
+      joinHeight = if (isDownload) calculatedMajorityWithoutGaps.maxHeight
+      else ownPeer.getOrElse(calculatedMajorityWithoutGaps.maxHeight)
+
+      majorityBeforeCutOff = {
+        val intersect = lastMajority.keySet & calculatedMajorityWithoutGaps.keySet
+        if (lastMajority.isEmpty || intersect.nonEmpty)
+          calculatedMajorityWithoutGaps
+        else
+          lastMajority
+      }
+
+      cutOffHeight = getCutOffHeight(joinHeight, calculatedMajorityWithoutGaps, lastMajority)
+      meaningfulMajority = majorityBeforeCutOff.removeHeightsBelow(cutOffHeight)
+      _ <- redownloadStorage.setLastMajorityState(meaningfulMajority)
+
+      (meaningfulAcceptedSnapshots, _, _) <- redownloadStorage.removeSnapshotsAndProposalsBelowHeight(cutOffHeight)
+
+      _ <- logger.debug(s"Meaningful majority in range ${calculatedMajority.heightRange}")
+
+      _ <- F
+        .pure(meaningfulMajority.maxHeight > lastMajority.maxHeight)
+        .ifM(redownloadStorage.resetMajorityStallCount, redownloadStorage.incrementMajorityStallCount)
+
+      _ <- if (meaningfulMajority.isEmpty) logger.debug("Meaningful majority is empty - skipping redownload")
+      else F.unit
+
+      shouldPerformRedownload = shouldRedownload(
+        meaningfulAcceptedSnapshots,
+        meaningfulMajority,
+        redownloadInterval,
+        isDownload
+      )
+
+      _ <- if (shouldPerformRedownload) {
+        {
+          if (isDownload)
+            broadcastService.compareAndSet(NodeState.validForDownload, NodeState.DownloadInProgress)
+          else
+            broadcastService.compareAndSet(NodeState.validForRedownload, NodeState.DownloadInProgress)
+        }.flatMap { state =>
+          if (state.isNewSet) {
+            wrappedRedownload(shouldPerformRedownload, meaningfulAcceptedSnapshots, meaningfulMajority).handleErrorWith {
+              error =>
+                logger.error(error)(s"Redownload error, isDownload=$isDownload: ${stringifyStackTrace(error)}") >> {
+                  if (isDownload)
+                    error.raiseError[F, Unit]
+                  else
+                    broadcastService
+                      .compareAndSet(NodeState.validDuringDownload, NodeState.Ready)
+                      .void
+                }
+            }
+          } else
+            logger.debug(s"Setting node state during redownload failed! Skipping redownload. isDownload=$isDownload")
+        }
+      } else logger.debug("No redownload needed - snapshots have been already aligned with majority state.")
+
+      _ <- logger.debug("Sending majority snapshots to cloud.")
+      _ <- if (meaningfulMajority.nonEmpty) sendMajoritySnapshotsToCloud()
+      else logger.debug("No majority - skipping sending to cloud")
+
+      _ <- logger.debug("Rewarding majority snapshots.")
+      _ <- if (meaningfulMajority.nonEmpty) rewardMajoritySnapshots().value.flatMap(F.fromEither)
+      else logger.debug("No majority - skipping rewarding")
+
+      _ <- logger.debug("Removing unaccepted snapshots from disk.")
+      _ <- removeUnacceptedSnapshotsFromDisk().value.flatMap(F.fromEither)
+
+      _ <- if (shouldPerformRedownload && !isDownload) { // I think we should only set it to Ready when we are not joining
+        broadcastService.compareAndSet(NodeState.validDuringDownload, NodeState.Ready)
+      } else F.unit
+
+      _ <- logger.debug("Accepting all the checkpoint blocks received during the redownload.")
+      _ <- acceptCheckpointBlocks().value.flatMap(F.fromEither)
+
+      _ <- if (!shouldPerformRedownload) findAndFetchMissingProposals(peerProposals, peersCache) else F.unit
+    } yield ()
+
+    nodeStorage.getNodeState.map { current =>
+      if (isDownload) NodeState.validForDownload.contains(current)
+      else NodeState.validForRedownload.contains(current)
+    }.ifM(
+      wrappedCheck,
+      logger.debug(s"Node state is not valid for redownload, skipping. isDownload=$isDownload") >> F.unit
+    )
+  }.handleErrorWith { error =>
+    logger.error(error)("Error during checking alignment with majority snapshot.") >>
+      error.raiseError[F, Unit]
+  }
+
+  def removeUnacceptedSnapshotsFromDisk(): EitherT[F, Throwable, Unit] =
+    for {
+      nextSnapshotHash <- snapshotServiceStorage.getNextSnapshotHash.attemptT
+      stored <- snapshotStorage.list().map(_.toSet)
+      accepted <- redownloadStorage.getAcceptedSnapshots.attemptT.map(_.values.toSet)
+      created <- redownloadStorage.getCreatedSnapshots.attemptT.map(_.values.map(_.value.hash).toSet)
+      diff = stored.diff(accepted ++ created ++ Set(nextSnapshotHash))
+      sentToCloud <- cloudService.getAlreadySent().map(_.map(_.hash)).attemptT
+      toRemove = diff.intersect(sentToCloud).toList
+      _ <- toRemove.traverse { hash =>
+        snapshotStorage.delete(hash) >>
+          snapshotInfoStorage.delete(hash) >>
+          cloudService.removeSentSnapshot(hash).attemptT
       }
     } yield ()
 
-  private def fetchProposalForPeer(peerId: Id)(fromPeerId: Id): F[Unit] =
+  private def getCutOffHeight(
+    joinHeight: Long,
+    candidateMajority: SnapshotsAtHeight,
+    lastMajority: SnapshotsAtHeight
+  ): Long = {
+    val ignorePoint = getIgnorePoint(candidateMajority.maxHeight)
+    min(max(ignorePoint, joinHeight), lastMajority.maxHeight)
+  }
+
+  def getIgnorePoint(maxHeight: Long): Long = maxHeight - meaningfulSnapshotsCount
+
+  private[redownload] def getLookupRange: F[HeightRange] =
     for {
-      peer <- clusterStorage.getPeer(peerId)
+      stallCount <- redownloadStorage.getMajorityStallCount
+      majorityHeight <- redownloadStorage.getLatestMajorityHeight
+      result = if (stallCount > stallCountThreshold)
+        HeightRange(majorityHeight + heightInterval, majorityHeight + proposalLookupLimit)
+      else HeightRange.Empty
+    } yield result
+
+  private def findAndFetchMissingProposals(peersProposals: PeersProposals, peersCache: PeersCache): F[Unit] =
+    for {
+      lookupRange <- getLookupRange
+      _ <- lookupRange.empty
+        .pure[F]
+        .ifM(
+          logger.info("Skip looking for missing proposals"), {
+            val missingProposals =
+              missingProposalFinder.findMissingPeerProposals(lookupRange, peersProposals, peersCache)
+            missingProposals.nonEmpty
+              .pure[F]
+              .ifM(
+                logger.info(s"Missing proposals found in range $lookupRange, $missingProposals") >>
+                  queryMissingProposals(missingProposals),
+                logger.info(s"No missing proposals found")
+              ) >> updateMissingProposalsMetric(missingProposals)
+          }
+        )
+
+    } yield ()
+
+  def updateMissingProposalsMetric(coordinates: Set[ProposalCoordinate]): F[Unit] =
+    coordinates
+      .groupBy(_._1)
+      .toList
+      .traverse {
+        case (id, coordinates) =>
+          coordinates.map(_._2).toList.minimumOption.traverse { height =>
+            metrics.updateMetricAsync(
+              "redownload_lowestMissingSnapshotProposalHeight",
+              height,
+              Seq(("peerId", id.hex))
+            )
+          }
+      }
+      .void
+
+  private def queryMissingProposals(coordinates: Set[ProposalCoordinate]): F[Unit] =
+    for {
+      remoteFilters <- shuffledRemoteFilterList
+      peerToQuery = selectPeersForQueries(coordinates, remoteFilters)
+      _ <- logger.info(s"Querying missing proposals from peers $peerToQuery")
+      _ <- peerToQuery.toList.traverse {
+        case (peerId, query) => fetchAndUpdatePeerProposals(query, peerId)
+      }
+    } yield ()
+
+  private def shuffledRemoteFilterList: F[List[(Id, CuckooFilter)]] =
+    for {
+      map <- redownloadStorage.getRemoteFilters
+      result <- F.delay {
+        Random.shuffle(map.toList)
+      }
+    } yield result
+
+  private def selectPeersForQueries(
+    missingProposals: Set[ProposalCoordinate],
+    remoteFilters: List[(Id, CuckooFilter)]
+  ): Map[Id, Set[ProposalCoordinate]] =
+    missingProposals
+      .foldLeft(Map.empty[Id, Set[ProposalCoordinate]]) { (acc, proposalCoordinate) =>
+        remoteFilters.find {
+          case (_, f) => f.contains(proposalCoordinate)
+        }.map {
+          case (id, _) => acc |+| Map(id -> Set(proposalCoordinate))
+        }.getOrElse(acc)
+      }
+
+  private def fetchAndUpdatePeerProposals(query: Set[ProposalCoordinate], peerId: Id): F[Unit] =
+    for {
+      peer <- clusterStorage.getPeers.map(_.get(peerId))
       apiClient = peer.map(_.peerMetadata.toPeerClientMetadata)
-      _ <- apiClient.traverse(fetchAndUpdatePeerProposals(peerId))
+      _ <- apiClient.traverse { client =>
+        for {
+          proposals <- fetchPeerProposals(query.toList, client)
+          filteredProposals = proposals
+            .mapFilter(identity)
+            .filter(_.validSignature)
+          _ <- redownloadStorage.persistPeerProposals(filteredProposals)
+        } yield ()
+      }
     } yield ()
 
   private[redownload] def sendMajoritySnapshotsToCloud(): F[Unit] = {
@@ -643,15 +718,22 @@ class RedownloadService[F[_]: NonEmptyParallel](
     }
   }
 
-  private def formatProposals(proposals: SnapshotProposalsAtHeight) =
-    SortedMap[Long, String]() ++ proposals.mapValues(_.value.hash)
+  private[redownload] def maxHeight[V](snapshots: Map[Long, V]): Long =
+    if (snapshots.isEmpty) 0
+    else snapshots.keySet.max
+
+  private[redownload] def minHeight[V](snapshots: Map[Long, V]): Long =
+    if (snapshots.isEmpty) 0
+    else snapshots.keySet.min
 
   private def formatSnapshots(snapshots: SnapshotsAtHeight) =
     SortedMap[Long, String]() ++ snapshots
+
 }
 
 object RedownloadService {
   type Reputation = SortedMap[Id, Double]
+  type ProposalCoordinate = (Id, Long)
   type SnapshotsAtHeight = Map[Long, String] // height -> hash
   type SnapshotProposalsAtHeight = Map[Long, Signed[SnapshotProposal]]
   type PeersProposals = Map[Id, SnapshotProposalsAtHeight]
@@ -661,7 +743,6 @@ object RedownloadService {
 
   def apply[F[_]: Concurrent: ContextShift: NonEmptyParallel: Timer](
     redownloadStorage: RedownloadStorageAlgebra[F],
-    redownloadInterval: Int,
     nodeStorage: NodeStorageAlgebra[F],
     clusterStorage: ClusterStorageAlgebra[F],
     majorityStateChooser: MajorityStateChooser,
@@ -683,7 +764,6 @@ object RedownloadService {
   ): RedownloadService[F] =
     new RedownloadService[F](
       redownloadStorage,
-      redownloadInterval,
       nodeStorage,
       clusterStorage,
       majorityStateChooser,
@@ -709,4 +789,7 @@ object RedownloadService {
   implicit val snapshotProposalsAtHeightDecoder: Decoder[Map[Long, SnapshotProposal]] =
     Decoder.decodeMap[Long, SnapshotProposal]
 
+  implicit val proposalCoordinateToString: ProposalCoordinate => String = {
+    case (id, height) => s"$id:$height"
+  }
 }

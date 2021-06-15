@@ -9,8 +9,14 @@ import org.constellation.gossip.snapshot.SnapshotProposalGossipService
 import org.constellation.p2p.{Cluster, SetStateResult}
 import org.constellation.schema.NodeState
 import org.constellation.schema.signature.Signed.signed
-import org.constellation.schema.snapshot.{MajorityInfo, SnapshotProposal, SnapshotProposalPayload}
-import org.constellation.storage.{HeightIntervalConditionNotMet, NotEnoughSpace, SnapshotError, SnapshotIllegalState, SnapshotService}
+import org.constellation.schema.snapshot.{SnapshotProposal, SnapshotProposalPayload}
+import org.constellation.storage.{
+  HeightIntervalConditionNotMet,
+  NotEnoughSpace,
+  SnapshotError,
+  SnapshotIllegalState,
+  SnapshotService
+}
 import org.constellation.util.Logging._
 import org.constellation.util.{Metrics, PeriodicIO}
 import org.constellation.{ConfigUtil, DAO}
@@ -50,8 +56,7 @@ class SnapshotTrigger(periodSeconds: Int = 5, unboundedExecutionContext: Executi
         startTime <- IO(System.currentTimeMillis())
         snapshotResult <- snapshotService.attemptSnapshot().value
         elapsed <- IO(System.currentTimeMillis() - startTime)
-        majorityRange <- redownloadStorage.getMajorityRange
-        majorityGapRanges <- redownloadStorage.getMajorityGapRanges
+        filterData <- redownloadStorage.localFilterData
         _ = logger.debug(s"Attempt snapshot took: $elapsed millis")
         _ <- snapshotResult match {
           case Left(NotEnoughSpace) =>
@@ -84,10 +89,7 @@ class SnapshotTrigger(periodSeconds: Int = 5, unboundedExecutionContext: Executi
                       ),
                       keyPair
                     ),
-                    MajorityInfo(
-                      majorityRange,
-                      majorityGapRanges
-                    )
+                    filterData
                   )
                 )
                 .start

@@ -4,11 +4,32 @@ import org.constellation.schema.address.{Address, AddressCacheData, AddressMetaD
 import org.constellation.schema.checkpoint._
 import org.constellation.schema.edge._
 import org.constellation.schema.observation._
-import org.constellation.schema.serialization.ExplicitKryoRegistrar.KryoSerializer.{DefaultSerializer, CompatibleSerializer}
+import org.constellation.schema.serialization.ExplicitKryoRegistrar.KryoSerializer.{
+  CompatibleSerializer,
+  DefaultSerializer
+}
 import org.constellation.schema.signature.{HashSignature, SignatureBatch, Signed}
-import org.constellation.schema.snapshot.{HeightRange, MajorityInfo, Snapshot, SnapshotInfo, SnapshotInfoV1, SnapshotProposal, SnapshotProposalPayload, StoredSnapshot}
+import org.constellation.schema.snapshot.{
+  FilterData,
+  HeightRange,
+  Snapshot,
+  SnapshotInfo,
+  SnapshotInfoV1,
+  SnapshotProposal,
+  SnapshotProposalPayload,
+  StoredSnapshot
+}
 import org.constellation.schema.transaction._
-import org.constellation.schema.{ChannelMessage, ChannelMessageData, CommonMetadata, GenesisObservation, Height, Id, PeerNotification, SignedData}
+import org.constellation.schema.{
+  ChannelMessage,
+  ChannelMessageData,
+  CommonMetadata,
+  GenesisObservation,
+  Height,
+  Id,
+  PeerNotification,
+  SignedData
+}
 
 import scala.collection.SortedMap
 
@@ -86,7 +107,7 @@ object SchemaKryoRegistrar
         (classOf[SnapshotProposalPayload], 200, DefaultSerializer),
         (classOf[Signed[_]], 201, DefaultSerializer),
         (classOf[SnapshotProposal], 202, DefaultSerializer),
-        (classOf[MajorityInfo], 203, DefaultSerializer),
+        (classOf[FilterData], 203, DefaultSerializer),
         (classOf[HeightRange], 204, DefaultSerializer),
         (classOf[CheckpointBlockPayload], 205, DefaultSerializer),
         (classOf[FinishedCheckpointBlock], 206, DefaultSerializer),

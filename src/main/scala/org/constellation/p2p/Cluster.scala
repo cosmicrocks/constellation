@@ -25,6 +25,7 @@ import org.constellation.serialization.KryoSerializer
 import org.constellation.session.SessionTokenService
 import org.constellation.util.Logging._
 import org.constellation.util._
+import org.constellation.collection.MapUtils._
 
 import scala.concurrent.duration._
 import scala.util.Random
@@ -154,9 +155,6 @@ class Cluster[F[_]](
 
   def markOfflinePeer(nodeId: Id): F[Unit] = logThread(
     {
-      implicit val snapOrder: Order[SnapshotProposalsAtHeight] =
-        Order.by[SnapshotProposalsAtHeight, List[Long]](a => a.keySet.toList.sorted)
-
       val leavingFlow: F[Unit] = for {
         notOfflinePeers <- clusterStorage.getNotOfflinePeers
         _ <- logger.info(s"Mark offline peer: ${nodeId}")
@@ -169,38 +167,11 @@ class Cluster[F[_]](
           )(_.pure[F])
         leavingPeerId = leavingPeer.peerMetadata.id
         majorityHeight <- redownloadStorage.getLatestMajorityHeight
+        maxProposal <- redownloadStorage
+          .getPeerProposals(leavingPeerId)
+          .map(_.flatMap(_.maxHeightEntry))
 
-        proposals <- notOfflinePeers.toList.traverse {
-          case (_, pd) =>
-            timeoutTo(
-              PeerResponse
-                .run(
-                  apiClient.snapshot
-                    .getPeerProposals(leavingPeerId),
-                  unboundedBlocker
-                )(pd.peerMetadata.toPeerClientMetadata)
-                .handleErrorWith(
-                  _ =>
-                    logger.debug(
-                      s"Cannot get peer proposals for leaving node (id=${leavingPeerId} host=${leavingPeer.peerMetadata.host}) from peer (id=${pd.peerMetadata.id} host=${pd.peerMetadata.host}). Fallback to empty"
-                    ) >> F.pure(none[SnapshotProposalsAtHeight])
-                ),
-              5.seconds,
-              F.pure(none[SnapshotProposalsAtHeight])
-            )
-        }.flatMap { list =>
-          redownloadStorage
-            .getPeerProposals(leavingPeerId)
-            .map(list.::)
-        }.map(_.flatten)
-
-        maxProposal = proposals.maximumOption
-        _ <- maxProposal.map { proposal =>
-          logger.debug(s"Maximum proposal for leaving node id=${leavingPeerId} is empty? ${proposal.isEmpty}") >>
-            redownloadStorage.replacePeerProposals(leavingPeerId, proposal)
-        }.getOrElse(F.unit)
-
-        maxProposalHeight = maxProposal.flatMap(_.keySet.toList.maximumOption)
+        maxProposalHeight = maxProposal.map(_._1)
         joiningHeight = leavingPeer.majorityHeight.head.joined
 
         leavingHeight = maxProposalHeight
@@ -224,7 +195,7 @@ class Cluster[F[_]](
       } yield ()
 
       leavingFlow.handleErrorWith { err =>
-        logger.error(s"Error during marking peer as offline: ${err.getMessage}") >> F.raiseError[Unit](err)
+        logger.error(s"Error during marking peer as offline: ${err.getMessage}") >> F.raiseError(err)
       }
     },
     "cluster_markOfflinePeer"
