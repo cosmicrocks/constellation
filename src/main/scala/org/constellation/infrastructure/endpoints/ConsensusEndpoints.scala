@@ -73,11 +73,12 @@ class ConsensusEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) ex
     case req @ POST -> Root / "block-round" / "new-round" =>
       for {
         cmd <- req.decodeJson[RoundDataRemote]
-        participate =
-            snapshotService.getNextHeightInterval
-              .map(
-                last => if (last != 2 && last > cmd.tipsSOE.minHeight) throw SnapshotHeightAboveTip(cmd.roundId, last, cmd.tipsSOE.minHeight)
-              )
+        participate = snapshotService.getNextHeightInterval
+          .map(
+            last =>
+              if (last != 2 && last > cmd.tipsSOE.minHeight)
+                throw SnapshotHeightAboveTip(cmd.roundId, last, cmd.tipsSOE.minHeight)
+          )
           .flatMap(_ => consensusManager.participateInBlockCreationRound(convert(cmd)))
         response <- participate.flatMap { res =>
           F.start(C.shift >> consensusManager.continueRoundParticipation(res._1, res._2)) >> Ok()

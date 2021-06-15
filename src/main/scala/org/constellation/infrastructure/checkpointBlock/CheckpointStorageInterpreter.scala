@@ -88,7 +88,7 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
     soeHashes.toList.traverse(removeCheckpoint).void
 
   def removeCheckpoint(soeHash: String): F[Unit] =
-      accepted.remove(soeHash) >>
+    accepted.remove(soeHash) >>
       waitingForAcceptance.remove(soeHash) >>
       tips.remove(soeHash) >>
       usages(soeHash).set(none) >>
@@ -126,9 +126,11 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
     inAcceptance.remove(soeHash)
 
   def getWaitingForAcceptance: F[Set[CheckpointCache]] =
-    waitingForAcceptance.get.flatMap { _.toList.traverse {
-      getCheckpoint
-    }}.map(_.flatten).map(_.toSet)
+    waitingForAcceptance.get.flatMap {
+      _.toList.traverse {
+        getCheckpoint
+      }
+    }.map(_.flatten).map(_.toSet)
 
   def setWaitingForAcceptance(soeHashes: Set[String]): F[Unit] =
     waitingForAcceptance.set(soeHashes)
@@ -181,28 +183,24 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
     inSnapshot.get
 
   def areParentsAccepted(checkpoint: CheckpointCache): F[Boolean] =
-    checkpoint.checkpointBlock
-      .parentSOEHashes
-      .distinct
-      .toList
+    checkpoint.checkpointBlock.parentSOEHashes.distinct.toList
       .filterNot(_.equals(Genesis.Coinbase))
       .traverse { isCheckpointAccepted }
       .map(_.forall(_ == true))
 
   def areParentsAccepted(checkpoint: CheckpointCache, isAccepted: String => Boolean): Boolean =
-    checkpoint.checkpointBlock
-      .parentSOEHashes
-      .distinct
-      .toList
+    checkpoint.checkpointBlock.parentSOEHashes.distinct.toList
       .filterNot(_.equals(Genesis.Coinbase))
       .map { isAccepted }
       .forall(_ == true)
 
   def isCheckpointAccepted(soeHash: String): F[Boolean] =
-    accepted.exists(soeHash).ifM(
-      F.pure(true),
-      isInSnapshot(soeHash)
-    )
+    accepted
+      .exists(soeHash)
+      .ifM(
+        F.pure(true),
+        isInSnapshot(soeHash)
+      )
 
   def markAsAwaiting(soeHash: String): F[Unit] =
     awaiting.add(soeHash)
@@ -212,7 +210,7 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
   def setAwaiting(a: Set[String]): F[Unit] =
     awaiting.set(a)
 
-  def calculateHeight(soeHash: String): F[Option[Height]] = {
+  def calculateHeight(soeHash: String): F[Option[Height]] =
     for {
       checkpointHeight <- getCheckpoint(soeHash).map(_.map(_.height))
       calculatedHeight <- getParents(soeHash).map {
@@ -225,17 +223,17 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
         }
       }
     } yield checkpointHeight.orElse(calculatedHeight)
-  }
 
   def calculateHeight(checkpoint: CheckpointBlock): F[Option[Height]] =
     checkpoint.parentSOEHashes.toList.traverse { getCheckpoint }
-      .map(a => a.flatten).map { parents =>
+      .map(a => a.flatten)
+      .map { parents =>
         val maybeHeight = parents.map(_.height)
         if (maybeHeight.isEmpty)
           none[Height]
         else
           Height(maybeHeight.map(_.min).min + 1, maybeHeight.map(_.max).max + 1).some
-    }
+      }
 
   def getParents(soeHash: String): F[Option[List[CheckpointCache]]] =
     getParentSoeHashes(soeHash)

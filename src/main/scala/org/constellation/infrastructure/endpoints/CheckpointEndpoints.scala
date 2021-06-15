@@ -83,9 +83,9 @@ class CheckpointEndpoints[F[_]](implicit F: Concurrent[F], C: ContextShift[F]) e
                 C.shift >>
                   snapshotService.getNextHeightInterval.flatMap { nextHeight =>
                     (nextHeight, payload.block.value.checkpointCacheData.height) match {
-                      case (2, _)                                                 => accept
+                      case (2, _)                                           => accept
                       case (nextHeight, Height(min, _)) if nextHeight > min => F.unit
-                      case (_, _)                                                 => accept
+                      case (_, _)                                           => accept
                     }
                   } >>
                   checkpointBlockGossipService.spread(message)

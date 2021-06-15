@@ -60,23 +60,23 @@ class MetricsUpdater(
         metrics.updateMetricAsync[IO]("storedSnapshotHeight", value.height)
       }
 
-      _ <- redownloadStorage.getAcceptedSnapshots.map(_.size) >>=  { value =>
+      _ <- redownloadStorage.getAcceptedSnapshots.map(_.size) >>= { value =>
         metrics.updateMetricAsync[IO]("redownload_acceptedSnapshots", value)
       }
 
-      _ <- redownloadStorage.getCreatedSnapshots.map(_.size) >>=  { value =>
+      _ <- redownloadStorage.getCreatedSnapshots.map(_.size) >>= { value =>
         metrics.updateMetricAsync[IO]("redownload_createdSnapshots", value)
       }
 
-      _ <- redownloadStorage.getLatestMajorityHeight >>=  { value =>
+      _ <- redownloadStorage.getLatestMajorityHeight >>= { value =>
         metrics.updateMetricAsync[IO]("redownload_lastestMajorityHeight", value)
       }
 
-      _ <- redownloadStorage.getLowestMajorityHeight >>=  { value =>
+      _ <- redownloadStorage.getLowestMajorityHeight >>= { value =>
         metrics.updateMetricAsync[IO]("redownload_lowestMajorityHeight", value)
       }
 
-      _ <- redownloadStorage.getLastSentHeight >>=  { value =>
+      _ <- redownloadStorage.getLastSentHeight >>= { value =>
         metrics.updateMetricAsync[IO]("redownload_lastSentHeight", value)
       }
     } yield ()

@@ -39,15 +39,13 @@ class BroadcastService[F[_]: Clock: ContextShift](
   private def broadcastNodeState(nodeState: NodeState, nodeId: Id = nodeId): F[Unit] =
     logThread(
       broadcast(
-          PeerResponse.run(apiClient.cluster.setNodeStatus(SetNodeStatus(nodeId, nodeState)), unboundedBlocker),
-          Set(nodeId)
-        )
-        .flatTap {
-          _.filter(_._2.isLeft).toList.traverse {
-            case (id, e) => logger.warn(s"Unable to propagate status to node ID: $id")
-          }
+        PeerResponse.run(apiClient.cluster.setNodeStatus(SetNodeStatus(nodeId, nodeState)), unboundedBlocker),
+        Set(nodeId)
+      ).flatTap {
+        _.filter(_._2.isLeft).toList.traverse {
+          case (id, e) => logger.warn(s"Unable to propagate status to node ID: $id")
         }
-        .void,
+      }.void,
       "cluster_broadcastNodeState"
     )
 

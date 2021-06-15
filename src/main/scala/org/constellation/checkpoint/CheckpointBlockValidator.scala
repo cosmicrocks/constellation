@@ -353,7 +353,7 @@ class CheckpointBlockValidator[F[_]: Sync](
     val containsAccepted = cb.transactions.toList.map { t =>
       transactionService.lookup(t.hash).map {
         case Some(tx) if tx.cbBaseHash != cb.soeHash.some => (t.hash, true)
-        case _                                             => (t.hash, false)
+        case _                                            => (t.hash, false)
       }
       transactionService.isAccepted(t.hash).map(b => (t.hash, b))
     }.sequence[F, (String, Boolean)]

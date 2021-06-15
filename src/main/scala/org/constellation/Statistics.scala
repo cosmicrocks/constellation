@@ -14,6 +14,7 @@ object Statistics extends IOApp {
   val s3Region = "us-west-1"
   val height = "1114830"
   val hash = "6160db2d7582e0a6fd20e0a1593cbb28ffea4b8af00ecf3b1788b7f35cd5c665"
+
   val s3Client = Stream.eval {
     IO {
       AmazonS3ClientBuilder
@@ -23,6 +24,7 @@ object Statistics extends IOApp {
         .build()
     }
   }
+
   val fetchSnapshotInfo = {
     for {
       client <- s3Client
@@ -39,6 +41,7 @@ object Statistics extends IOApp {
       snapshotInfo <- Stream.eval { IO { KryoSerializer.deserializeCast[SnapshotInfo](bytes) } }
     } yield snapshotInfo
   }
+
   val main: Stream[IO, Unit] = fetchSnapshotInfo.flatMap { snapshotInfo =>
     Stream.eval {
       IO {

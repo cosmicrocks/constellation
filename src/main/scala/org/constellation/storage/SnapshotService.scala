@@ -67,8 +67,7 @@ class SnapshotService[F[_]: Concurrent](
         .leftMap(SnapshotUnexpectedError)
         .leftWiden[SnapshotError]
 
-      minWaitingHeight <- checkpointStorage.getMinWaitingHeight
-        .attemptT
+      minWaitingHeight <- checkpointStorage.getMinWaitingHeight.attemptT
         .leftMap(SnapshotUnexpectedError)
         .leftWiden[SnapshotError]
 
@@ -208,7 +207,6 @@ class SnapshotService[F[_]: Concurrent](
   def setSnapshot(snapshotInfo: SnapshotInfo): F[Unit] =
     for {
 //      _ <- C.evalOn(boundedExecutionContext)(removeStoredSnapshotDataFromMempool())
-
       _ <- snapshotServiceStorage.setStoredSnapshot(snapshotInfo.snapshot)
       _ <- snapshotServiceStorage.setLastSnapshotHeight(snapshotInfo.lastSnapshotHeight)
       _ <- snapshotServiceStorage.setNextSnapshotHash(snapshotInfo.nextSnapshotHash)
@@ -310,7 +308,10 @@ class SnapshotService[F[_]: Concurrent](
         nextHeightInterval <= (height + (snapshotHeightDelayInterval / 2))
       }.ifM(
         ().asRight[SnapshotError].pure[F],
-        SnapshotUnexpectedError(new Throwable(s"Max distance from majority has been reached!")).asLeft[Unit].leftWiden[SnapshotError].pure[F]
+        SnapshotUnexpectedError(new Throwable(s"Max distance from majority has been reached!"))
+          .asLeft[Unit]
+          .leftWiden[SnapshotError]
+          .pure[F]
       )
     }
 
@@ -324,7 +325,9 @@ class SnapshotService[F[_]: Concurrent](
       metrics.updateMetricAsync[F]("minTipHeight", minTipHeight) >>
         metrics.updateMetricAsync[F]("minWaitingHeight", minWaitingHeight.getOrElse(0L)) >>
         Sync[F].pure {
-          if (minTipHeight > (nextHeightInterval + snapshotHeightDelayInterval) && minWaitingHeight.fold(true)(_ > nextHeightInterval))
+          if (minTipHeight > (nextHeightInterval + snapshotHeightDelayInterval) && minWaitingHeight.fold(true)(
+                _ > nextHeightInterval
+              ))
             ().asRight[SnapshotError]
           else
             HeightIntervalConditionNotMet.asLeft[Unit]
