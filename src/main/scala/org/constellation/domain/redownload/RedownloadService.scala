@@ -203,8 +203,8 @@ class RedownloadService[F[_]: NonEmptyParallel](
       }).map(_.map(_._1))
 
       _ <- logger.debug(s"Removing checkpoints below height: ${lowestMajorityHeight - 2}. To remove: ${checkpointsToRemove.size}")
-//      _ <- checkpointStorage.removeCheckpoints(checkpointsToRemove)
-//
+      _ <- checkpointStorage.removeCheckpoints(checkpointsToRemove)
+
       _ <- if (shouldPerformRedownload && !isDownload) { // I think we should only set it to Ready when we are not joining
         broadcastService.compareAndSet(NodeState.validDuringDownload, NodeState.Ready)
       } else F.unit
