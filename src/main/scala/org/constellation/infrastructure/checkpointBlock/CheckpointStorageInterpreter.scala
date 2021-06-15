@@ -189,6 +189,15 @@ class CheckpointStorageInterpreter[F[_]](implicit F: Concurrent[F]) extends Chec
       .traverse { isCheckpointAccepted }
       .map(_.forall(_ == true))
 
+  def areParentsAccepted(checkpoint: CheckpointCache, isAccepted: String => Boolean): Boolean =
+    checkpoint.checkpointBlock
+      .parentSOEHashes
+      .distinct
+      .toList
+      .filterNot(_.equals(Genesis.Coinbase))
+      .map { isAccepted }
+      .forall(_ == true)
+
   def isCheckpointAccepted(soeHash: String): F[Boolean] =
     accepted.exists(soeHash).ifM(
       F.pure(true),

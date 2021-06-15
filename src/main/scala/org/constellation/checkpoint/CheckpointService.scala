@@ -91,15 +91,26 @@ class CheckpointService[F[_]: Timer: Clock](
   def recalculateQueue(): F[Unit] =
     for {
       blocksForAcceptance <- checkpointStorage.getWaitingForAcceptance
-      notAlreadyAccepted <- blocksForAcceptance.toList.filterA { c => checkpointStorage.isCheckpointAccepted(c.checkpointBlock.soeHash).map(!_) }
+
+      accepted <- checkpointStorage.getAccepted
+      inSnapshot <- checkpointStorage.getInSnapshot.map(_.map(_._1))
+      acceptedPool = accepted ++ inSnapshot
+
+      notAlreadyAccepted = blocksForAcceptance.filterNot(cb => acceptedPool.contains(cb.checkpointBlock.soeHash)).toList
+
       lastSnapshotHeight <- snapshotStorage.getLastSnapshotHeight
       aboveLastSnapshotHeight = notAlreadyAccepted.filter { _.height.min > lastSnapshotHeight }
 
       withNoBlacklistedTxs <- aboveLastSnapshotHeight.filterA { c => AwaitingCheckpointBlock.hasNoBlacklistedTxs(c.checkpointBlock)(blacklistedAddresses) }
-      withParentsAccepted <- withNoBlacklistedTxs.filterA(checkpointStorage.areParentsAccepted)
+
+      withParentsAccepted = withNoBlacklistedTxs.filter(soeHash => checkpointStorage.areParentsAccepted(soeHash, acceptedPool.contains))
+
       withReferencesAccepted <- withParentsAccepted.filterA { c => AwaitingCheckpointBlock.areReferencesAccepted(checkpointBlockValidator)(c.checkpointBlock) }
 
-      waitingForResolving <- withReferencesAccepted.toList.filterA { c => checkpointStorage.isWaitingForResolving(c.checkpointBlock.soeHash) }
+//      sorted = TopologicalSort.sortBlocksTopologically(withNoBlacklistedTxs).toList
+      allowedToAccept = withReferencesAccepted
+
+      _ <- checkpointStorage.setAcceptanceQueue(allowedToAccept.map((cbc: CheckpointCache) => cbc.checkpointBlock.soeHash).toSet)
 
       alreadyAccepted = blocksForAcceptance.diff(notAlreadyAccepted.toSet)
       _ <- alreadyAccepted.toList.map(_.checkpointBlock.soeHash).traverse { checkpointStorage.unmarkWaitingForAcceptance }
@@ -107,14 +118,16 @@ class CheckpointService[F[_]: Timer: Clock](
       belowLastSnapshotHeight = notAlreadyAccepted.diff(aboveLastSnapshotHeight)
       _ <- belowLastSnapshotHeight.map(_.checkpointBlock.soeHash).traverse { checkpointStorage.unmarkWaitingForAcceptance }
 
-//      sorted = TopologicalSort.sortBlocksTopologically(withNoBlacklistedTxs).toList
-      allowedToAccept = withReferencesAccepted
-
       withNoParentsAccepted = notAlreadyAccepted.toSet.diff(withParentsAccepted.toSet)
-      withNoReferencesAccepted = notAlreadyAccepted.toSet.diff(withReferencesAccepted.toSet)
-
       _ <- withNoParentsAccepted.toList.map(_.checkpointBlock).traverse { resolveMissingParents }
+
+      withNoReferencesAccepted = notAlreadyAccepted.toSet.diff(withReferencesAccepted.toSet)
       _ <- withNoReferencesAccepted.toList.map(_.checkpointBlock).traverse { resolveMissingReferences }
+
+      waitingForResolving <- withReferencesAccepted.filterA { c => checkpointStorage.isWaitingForResolving(c.checkpointBlock.soeHash) }
+
+      _ <- logger.debug { s"[acc] Already accepted: ${alreadyAccepted.map(_.checkpointBlock.soeHash)}"}
+      _ <- logger.debug { s"[acc] Below last snapshot height: ${belowLastSnapshotHeight.map(_.checkpointBlock.soeHash)}"}
 
       _ <-
         logger.debug {
@@ -134,8 +147,6 @@ class CheckpointService[F[_]: Timer: Clock](
           metrics.updateMetricAsync("accept_withReferencesAccepted", withReferencesAccepted.size) >>
           metrics.updateMetricAsync("accept_alreadyAccepted", alreadyAccepted.size) >>
           metrics.updateMetricAsync("accept_belowLastSnapshotHeight", belowLastSnapshotHeight.size)
-
-      _ <- checkpointStorage.setAcceptanceQueue(allowedToAccept.map((cbc: CheckpointCache) => cbc.checkpointBlock.soeHash).toSet)
     } yield ()
 
   def acceptNextCheckpoint(): F[Unit] =

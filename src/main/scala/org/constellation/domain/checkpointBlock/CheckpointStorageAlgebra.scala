@@ -61,6 +61,7 @@ trait CheckpointStorageAlgebra[F[_]] {
   def getParentSoeHashes(soeHash: String): F[Option[List[String]]]
   def getParents(soeHash: String): F[Option[List[CheckpointCache]]]
   def areParentsAccepted(checkpoint: CheckpointCache): F[Boolean]
+  def areParentsAccepted(checkpoint: CheckpointCache, isAccepted: String => Boolean): Boolean
   def calculateHeight(soeHash: String): F[Option[Height]]
   def calculateHeight(checkpointBlock: CheckpointBlock): F[Option[Height]]
 
