@@ -124,6 +124,8 @@ class SnapshotService[F[_]: Concurrent](
         .leftWiden[SnapshotError]
       _ <- updateMetricsAfterSnapshot().attemptT.leftMap(SnapshotUnexpectedError).leftWiden[SnapshotError]
 
+      _ <- rateLimiting.reset(hashesForNextSnapshot)(checkpointStorage).attemptT.leftMap(SnapshotUnexpectedError).leftWiden[SnapshotError]
+
       snapshot = StoredSnapshot(nextSnapshot, allBlocks)
       _ <- snapshotServiceStorage
         .setStoredSnapshot(snapshot)
