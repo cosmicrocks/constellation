@@ -8,9 +8,7 @@ import io.chrisdavenport.log4cats.SelfAwareStructuredLogger
 import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
 import org.constellation.domain.cluster.ClusterStorageAlgebra
 import org.constellation.domain.trust.TrustDataInternal
-import org.constellation.p2p.Cluster
 import org.constellation.schema.Id
-import org.constellation.schema.NodeState.isNotOffline
 import org.constellation.trust.TrustManager
 import org.constellation.util.Partitioner._
 

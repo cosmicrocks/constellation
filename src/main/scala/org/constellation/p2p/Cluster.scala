@@ -324,7 +324,7 @@ class Cluster[F[_]](
     } yield ()
   }
 
-  def broadcastOwnJoinedHeight(): F[Unit] = {
+  def broadcastOwnJoinedHeight(): F[Unit] =
     for {
       height <- nodeStorage.getOwnJoinedHeight
       ownHeight <- if (height.isEmpty) F.raiseError(new Throwable("Own joined height not set!")) else height.get.pure[F]
@@ -343,7 +343,6 @@ class Cluster[F[_]](
         )
       )
     } yield ()
-  }
 
   // I join to someone
   def attemptRegisterPeer(peerClientMetadata: PeerClientMetadata, isReconciliationJoin: Boolean = false): F[Unit] =
@@ -522,9 +521,7 @@ class Cluster[F[_]](
     for {
       height <- nodeStorage.getOwnJoinedHeight
 
-      peers <- clusterStorage.getPeers.map(_.filter {
-        case (_, pd) => NodeState.isNotOffline(pd.peerMetadata.nodeState)
-      })
+      peers <- clusterStorage.getNotOfflinePeers
       peersSize = peers.size
       minFacilitatorsSize = processingConfig.numFacilitatorPeers
       isInitialFacilitator = peersSize < minFacilitatorsSize

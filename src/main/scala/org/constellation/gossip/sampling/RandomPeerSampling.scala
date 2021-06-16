@@ -47,11 +47,7 @@ class RandomPeerSampling[F[_]](selfId: Id, clusterStorage: ClusterStorageAlgebra
       .map(IndexedSeq[Id](_: _*))
   }
 
-  private def getPeers: F[Set[Id]] =
-    clusterStorage.getPeers
-      .map(_.filter {
-        case (_, pd) => NodeState.isNotOffline(pd.peerMetadata.nodeState)
-      }.keySet)
+  private def getPeers: F[Set[Id]] = clusterStorage.getNotOfflinePeers.map(_.keySet)
 
   protected def generatePathId: F[String] = FUUID.randomFUUID.map(_.toString)
 }
