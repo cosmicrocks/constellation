@@ -273,6 +273,7 @@ class Cluster[F[_]](
 //          _ <- clearServicesBeforeJoin()
           _ <- attemptRegisterPeer(hp)
           _ <- T.sleep(15.seconds)
+          _ <- setOwnJoinedHeight()
           _ <- downloadService.download()
           _ <- broadcastOwnJoinedHeight()
         } yield ()
@@ -285,7 +286,7 @@ class Cluster[F[_]](
       "cluster_join"
     )
 
-  def broadcastOwnJoinedHeight(): F[Unit] = {
+  def setOwnJoinedHeight(): F[Unit] = {
     val discoverJoinedHeight = for {
       p <- clusterStorage.getNotOfflinePeers
       clients = p.map(_._2.peerMetadata).toList
@@ -319,8 +320,14 @@ class Cluster[F[_]](
 
     for {
       height <- nodeStorage.getOwnJoinedHeight
-      _ <- logger.debug(s"Broadcasting own joined height - step1: height=$height")
-      ownHeight <- height.map(_.pure[F]).getOrElse(discoverJoinedHeight)
+      _ <- height.map(_.pure[F]).getOrElse(discoverJoinedHeight)
+    } yield ()
+  }
+
+  def broadcastOwnJoinedHeight(): F[Unit] = {
+    for {
+      height <- nodeStorage.getOwnJoinedHeight
+      ownHeight <- if (height.isEmpty) F.raiseError(new Throwable("Own joined height not set!")) else height.get.pure[F]
       _ <- logger.debug(s"Broadcasting own joined height - step2: height=$ownHeight")
       _ <- broadcastService.broadcast(
         PeerResponse.run(apiClient.cluster.setJoiningHeight(JoinedHeight(nodeId, ownHeight)), unboundedBlocker)
