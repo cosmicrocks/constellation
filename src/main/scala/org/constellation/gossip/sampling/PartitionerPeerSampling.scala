@@ -49,16 +49,14 @@ class PartitionerPeerSampling[F[_]: Concurrent](
 
   private def cachedPartitionsCoverAllPeers: F[Boolean] =
     for {
-      peerIds <- clusterStorage.getPeers.map(_.filter {
-        case (_, peerData) => isNotOffline(peerData.peerMetadata.nodeState)
-      }.keySet)
+      peerIds <- clusterStorage.getNotOfflinePeers.map(_.keySet)
       cachedTdi <- trustDataInternalCache.get.map(_.map(_.id).toSet)
     } yield peerIds == cachedTdi
 
   private def repartitionWithDefaults(): F[Unit] =
     for {
       selfTdi <- trustManager.getTrustDataInternalSelf
-      peerIds <- clusterStorage.getPeers.map(_.keySet)
+      peerIds <- clusterStorage.getNotOfflinePeers.map(_.keySet)
       cachedTdi <- trustDataInternalCache.get
       missingTdi = peerIds -- cachedTdi.map(_.id)
       _ <- logger.debug(
