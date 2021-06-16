@@ -45,7 +45,7 @@ class CheckpointClientInterpreter[F[_]: ContextShift](
       else
         F.raiseError(
           new Throwable(
-            s"Cannot post finished checkpoint of hash ${message.payload.block.value.hash}"
+            s"Cannot post finished checkpoint of hash ${message.payload.block.value.checkpointCacheData.checkpointBlock.soeHash}"
           )
         )
     }
