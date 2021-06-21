@@ -436,7 +436,7 @@ class TransactionServiceTest
       txService.findAndRemoveInvalidPendingTxs().unsafeRunSync
 
       val result = txService.lookup("other").unsafeRunSync
-      result should contain (otherTx)
+      result should contain(otherTx)
     }
   }
 

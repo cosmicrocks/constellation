@@ -1,28 +1,39 @@
 package org.constellation.migrations
 
-import org.constellation.schema.snapshot.{SnapshotInfo, SnapshotInfoV1}
+import org.constellation.schema.checkpoint.{CheckpointCache, CheckpointCacheV1}
+import org.constellation.schema.snapshot.{SnapshotInfo, SnapshotInfoV1, StoredSnapshot, StoredSnapshotV1}
 
 object SnapshotInfoV1Migration {
 
+  def convertBlock(old: CheckpointCacheV1): CheckpointCache =
+    CheckpointCache(
+      old.checkpointBlock,
+      old.children,
+      old.height.get
+    )
+
+  def convertStoredSnapshot(old: StoredSnapshotV1): StoredSnapshot =
+    StoredSnapshot(
+      old.snapshot,
+      old.checkpointCache.map(convertBlock)
+    )
+
   def convert(old: SnapshotInfoV1): SnapshotInfo =
     SnapshotInfo(
-      snapshot = old.snapshot,
+      snapshot = convertStoredSnapshot(old.snapshot),
       lastSnapshotHeight = old.lastSnapshotHeight,
-      nextSnapshotHash = "",
-      checkpoints = Map.empty,
-      waitingForAcceptance = Set.empty,
-      accepted = Set.empty,
+      nextSnapshotHash = old.snapshot.snapshot.hash,
+      checkpoints = (old.acceptedCBSinceSnapshotCache ++ old.awaitingCbs)
+        .map(convertBlock)
+        .map(cb => (cb.checkpointBlock.soeHash, cb))
+        .toMap,
+      waitingForAcceptance = old.awaitingCbs.map(_.checkpointBlock.soeHash),
+      accepted = old.acceptedCBSinceSnapshot.toSet,
       awaiting = Set.empty,
-      inSnapshot = Set.empty,
+      inSnapshot = old.snapshot.checkpointCache.map(cb => (cb.checkpointBlock.soeHash, old.snapshot.height)).toSet,
       addressCacheData = old.addressCacheData,
       lastAcceptedTransactionRef = old.lastAcceptedTransactionRef,
       tips = old.tips.keySet,
-      usages = Map()
-
-//      acceptedCBSinceSnapshot = old.acceptedCBSinceSnapshot.toSet,
-//      acceptedCBSinceSnapshotCache = old.acceptedCBSinceSnapshotCache,
-//      awaitingCheckpoints = old.awaitingCbs.map(_.checkpointBlock.soeHash),
-//      snapshotHashes = old.snapshotHashes,
-//      snapshotCache = old.snapshotCache,
+      usages = Map.empty
     )
 }

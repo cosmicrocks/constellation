@@ -10,6 +10,12 @@ case class CheckpointCache(
   height: Height = Height(0L, 0L)
 )
 
+case class CheckpointCacheV1(
+  checkpointBlock: CheckpointBlock,
+  children: Int = 0,
+  height: Option[Height] = None
+)
+
 object CheckpointCache {
   implicit val checkpointCacheOrdering: Ordering[CheckpointCache] =
     Ordering.by[CheckpointCache, Long](_.height.min)

@@ -17,7 +17,8 @@ import org.constellation.schema.snapshot.{
   SnapshotInfoV1,
   SnapshotProposal,
   SnapshotProposalPayload,
-  StoredSnapshot
+  StoredSnapshot,
+  StoredSnapshotV1
 }
 import org.constellation.schema.transaction._
 import org.constellation.schema.{
@@ -40,7 +41,7 @@ object SchemaKryoRegistrar
         (classOf[SignedData[ChannelMessageData]], 146, DefaultSerializer),
         (classOf[ChannelMessage], 147, DefaultSerializer),
         (classOf[Seq[ChannelMessage]], 148, DefaultSerializer),
-        (classOf[StoredSnapshot], 149, DefaultSerializer),
+        (classOf[StoredSnapshotV1], 149, DefaultSerializer),
         (classOf[SnapshotInfoV1], 150, DefaultSerializer),
         (classOf[TipData], 151, DefaultSerializer),
         (classOf[Height], 152, DefaultSerializer),
@@ -52,7 +53,7 @@ object SchemaKryoRegistrar
         (classOf[CheckpointEdge], 158, DefaultSerializer),
         (classOf[AddressCacheData], 159, DefaultSerializer),
         (classOf[TransactionCacheData], 160, DefaultSerializer),
-        (classOf[CheckpointCache], 161, DefaultSerializer),
+        (classOf[CheckpointCacheV1], 161, DefaultSerializer),
         (classOf[Transaction], 1001, DefaultSerializer),
         (classOf[TransactionGossip], 162, DefaultSerializer),
         (classOf[Edge[TransactionEdgeData]], 1005, DefaultSerializer),
@@ -111,6 +112,8 @@ object SchemaKryoRegistrar
         (classOf[HeightRange], 204, DefaultSerializer),
         (classOf[CheckpointBlockPayload], 205, DefaultSerializer),
         (classOf[FinishedCheckpointBlock], 206, DefaultSerializer),
-        (classOf[SnapshotInfo], 1034, CompatibleSerializer)
+        (classOf[CheckpointCache], 1034, CompatibleSerializer),
+        (classOf[StoredSnapshot], 1035, CompatibleSerializer),
+        (classOf[SnapshotInfo], 1036, CompatibleSerializer)
       )
     ) {}
