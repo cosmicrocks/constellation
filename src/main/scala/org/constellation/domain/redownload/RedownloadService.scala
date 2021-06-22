@@ -332,7 +332,8 @@ class RedownloadService[F[_]: NonEmptyParallel: Applicative](
 
       cutOffHeight = getCutOffHeight(joinHeight, calculatedMajorityWithoutGaps, lastMajority)
       meaningfulMajority = majorityBeforeCutOff.removeHeightsBelow(cutOffHeight)
-      _ <- redownloadStorage.setLastMajorityState(meaningfulMajority)
+      _ <- redownloadStorage.setLastMajorityState(meaningfulMajority) >>
+        metrics.updateMetricAsync("redownload_lastMajorityStateHeight", meaningfulMajority.maxHeight)
 
       (meaningfulAcceptedSnapshots, _, _) <- redownloadStorage.removeSnapshotsAndProposalsBelowHeight(cutOffHeight)
 

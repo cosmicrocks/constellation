@@ -69,7 +69,7 @@ class MutableCuckooFilter[F[_], T](filter: NanoCuckooFilter)(implicit F: Sync[F]
 
 object MutableCuckooFilter {
 
-  def apply[F[_]: Sync, T](capacity: Long = 512): MutableCuckooFilter[F, T] =
+  def apply[F[_]: Sync, T](capacity: Long = 8192): MutableCuckooFilter[F, T] =
     new MutableCuckooFilter[F, T](new NanoCuckooFilter.Builder(capacity).build())
 
 }
