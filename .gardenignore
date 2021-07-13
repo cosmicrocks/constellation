@@ -23,5 +23,3 @@ terraform/aws/whitelisting-*
 project/metals.sbt
 keys/
 integration-tests/src/test/resources/terraform-output.json
-
-.garden

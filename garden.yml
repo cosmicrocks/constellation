@@ -1,0 +1,57 @@
+# Indicate what kind of config this is.
+kind: Project
+
+# The name of the project.
+name: constellation
+
+# A list of environments to configure for the project.
+environments:
+  - name: local
+
+providers:
+  - name: local-kubernetes
+    environments: [local]
+    buildMode: kaniko
+
+---
+kind: Module
+description: node
+type: container
+name: node
+services:
+  - name: node
+    cpu:
+      min: 1
+    env:
+      CL_MIN_CPU_COUNT: 1
+      CL_STOREPASS: storepass
+      CL_KEYPASS: keypass     
+    command:
+      - java
+      - -Dcom.sun.management.jmxremote
+      - -Dcom.sun.management.jmxremote.port=9010
+      - -Dcom.sun.management.jmxremote.rmi.port=9011
+      - -Dcom.sun.management.jmxremote.local.only=false
+      - -Dcom.sun.management.jmxremote.authenticate=false
+      - -Dcom.sun.management.jmxremote.ssl=false
+      - -XX:+HeapDumpOnOutOfMemoryError
+      - -XX:+UnlockExperimentalVMOptions 
+      - -XX:+UseCGroupMemoryLimitForHeap
+      - -Xms1024M  
+      - -Xmx8G 
+      - -Xss256K
+      - -Djava.rmi.server.hostname=127.0.0.1 
+      - -agentlib:jdwp=transport=dt_socket,server=y,address=8000,suspend=n 
+      - -jar
+      - cl-node.jar
+    args: 
+      - --ip 
+      - "127.0.0.1"
+      - --port 
+      - "9000"
+      - --whitelisting 
+      - whitelist
+      - --keystore 
+      - key.p12
+      - --alias 
+      - alias
